@@ -9,12 +9,12 @@ Provides common event handlers and device lifecycle management.
 
 import asyncio
 import logging
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Any, Generic, TypeVar
 
 import ucapi
 import ucapi.api as uc
-from ucapi import media_player
+from ucapi import media_player, Entity, EntityTypes
 from .device import BaseDeviceInterface, DeviceEvents
 
 # Type variables for generic device and entity types
@@ -22,6 +22,41 @@ DeviceT = TypeVar("DeviceT", bound=BaseDeviceInterface)  # Device interface type
 ConfigT = TypeVar("ConfigT")  # Device configuration type (any object with attributes)
 
 _LOG = logging.getLogger(__name__)
+
+
+def create_entity_id(
+    device_id: str, entity_type: EntityTypes | str, entity_id: str | None = None
+) -> str:
+    """
+    Create a unique entity identifier for the given device and entity type.
+
+    Entity IDs follow the format:
+    - Simple: "{entity_type}.{device_id}"
+    - With entity: "{entity_type}.{device_id}.{entity_id}"
+
+    Use the optional entity_id parameter for devices that expose multiple entities
+    of the same type, such as a hub with multiple lights or zones.
+
+    Examples:
+        >>> create_entity_id("device_123", EntityTypes.MEDIA_PLAYER)
+        'media_player.device_123'
+        >>> create_entity_id("hub_1", EntityTypes.LIGHT, "light_bedroom")
+        'light.hub_1.light_bedroom'
+        >>> create_entity_id("receiver_abc", "media_player", "zone_2")
+        'media_player.receiver_abc.zone_2'
+
+    :param device_id: The device identifier (hub or parent device)
+    :param entity_type: The entity type (EntityTypes enum or string)
+    :param entity_id: Optional sub-entity identifier (e.g., light ID, zone ID)
+    :return: Entity identifier in the format "entity_type.device_id" or "entity_type.device_id.entity_id"
+    """
+    type_str = (
+        entity_type.value if isinstance(entity_type, EntityTypes) else entity_type
+    )
+
+    if entity_id:
+        return f"{type_str}.{device_id}.{entity_id}"
+    return f"{type_str}.{device_id}"
 
 
 class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
@@ -469,46 +504,204 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
             f"Override get_device_address() to specify which attribute to use."
         )
 
-    # ========================================================================
-    # Abstract Methods (Must be implemented by subclasses)
-    # ========================================================================
-
-    @abstractmethod
-    def device_from_entity_id(self, entity_id: str) -> str | None:
-        """
-        Extract device identifier from entity identifier.
-
-        :param entity_id: Entity identifier (e.g., "media_player.device_123")
-        :return: Device identifier or None
-        """
-
-    @abstractmethod
-    def get_entity_ids_for_device(self, device_id: str) -> list[str]:
-        """
-        Get all entity identifiers for a device.
-
-        :param device_id: Device identifier
-        :return: List of entity identifiers
-        """
-
-    @abstractmethod
-    def map_device_state(self, device_state: Any) -> media_player.States:
-        """
-        Map device-specific state to ucapi media player state.
-
-        :param device_state: Device-specific state
-        :return: Media player state
-        """
-
-    @abstractmethod
-    def create_entities(self, device_config: ConfigT, device: DeviceT) -> list[Any]:
+    def create_entities(self, device_config: ConfigT, device: DeviceT) -> list[Entity]:
         """
         Create entity instances for a device.
+
+        DEFAULT IMPLEMENTATION: Creates entities from the entity_classes passed to __init__.
+        Each entity class is instantiated with (device_config, device) as parameters.
+
+        The default implementation returns:
+            [EntityClass1(device_config, device), EntityClass2(device_config, device), ...]
+
+        Override this method if you need:
+        - Conditional entity creation based on device capabilities
+        - Custom parameters beyond device_config and device
+        - Dynamic entity creation logic
+
+        Example override:
+            def create_entities(self, device_config, device):
+                entities = []
+                if device.supports_playback:
+                    entities.append(YamahaMediaPlayer(device_config, device))
+                if device.supports_remote:
+                    entities.append(YamahaRemote(device_config, device))
+                return entities
 
         :param device_config: Device configuration
         :param device: Device instance
         :return: List of entity instances (MediaPlayer, Remote, etc.)
         """
+        return [
+            entity_class(device_config, device) for entity_class in self._entity_classes
+        ]
+
+    def map_device_state(self, device_state: Any) -> media_player.States:
+        """
+        Map device-specific state to ucapi media player state.
+
+        DEFAULT IMPLEMENTATION: Converts device_state to uppercase string and maps
+        common state values to media_player.States:
+
+        - UNAVAILABLE → UNAVAILABLE
+        - UNKNOWN → UNKNOWN
+        - ON, MENU, IDLE, ACTIVE, READY → ON
+        - OFF, POWER_OFF, POWERED_OFF → OFF
+        - PLAYING, PLAY → PLAYING
+        - PAUSED, PAUSE → PAUSED
+        - STANDBY, SLEEP → STANDBY
+        - BUFFERING, LOADING → BUFFERING
+        - Everything else → UNKNOWN
+
+        Override this method if you need:
+        - Different state mappings
+        - Device-specific state enum handling
+        - Complex state logic
+
+        Example override:
+            def map_device_state(self, device_state):
+                if isinstance(device_state, MyDeviceState):
+                    match device_state:
+                        case MyDeviceState.POWERED_ON:
+                            return media_player.States.ON
+                        case MyDeviceState.POWERED_OFF:
+                            return media_player.States.OFF
+                        case _:
+                            return media_player.States.UNKNOWN
+                return super().map_device_state(device_state)
+
+        :param device_state: Device-specific state (string, enum, or any object with __str__)
+        :return: Media player state
+        """
+        if device_state is None:
+            return media_player.States.UNKNOWN
+
+        # Convert to uppercase string for comparison
+        state_str = str(device_state).upper()
+
+        match state_str:
+            case "UNAVAILABLE":
+                return media_player.States.UNAVAILABLE
+            case "UNKNOWN":
+                return media_player.States.UNKNOWN
+            case "ON" | "MENU" | "IDLE" | "ACTIVE" | "READY":
+                return media_player.States.ON
+            case "OFF" | "POWER_OFF" | "POWERED_OFF":
+                return media_player.States.OFF
+            case "PLAYING" | "PLAY":
+                return media_player.States.PLAYING
+            case "PAUSED" | "PAUSE":
+                return media_player.States.PAUSED
+            case "STANDBY" | "SLEEP":
+                return media_player.States.STANDBY
+            case "BUFFERING" | "LOADING":
+                return media_player.States.BUFFERING
+            case _:
+                return media_player.States.UNKNOWN
+
+    # ========================================================================
+    # Entity ID Methods (should be overridden together if custom format used)
+    # ========================================================================
+
+    def device_from_entity_id(self, entity_id: str) -> str | None:
+        """
+        Extract device identifier from entity identifier.
+
+        DEFAULT IMPLEMENTATION: Parses entity IDs created by create_entity_id().
+        Handles both formats:
+        - Simple: "entity_type.device_id" → returns "device_id"
+        - With sub-entity: "entity_type.device_id.entity_id" → returns "device_id"
+
+        **IMPORTANT**: If you override create_entities() to use a custom entity ID format,
+        you MUST also override this method to match your custom format. The default
+        implementation will detect this and raise an error to prevent bugs.
+
+        Example custom override:
+            def create_entities(self, device_config, device):
+                # Custom format: entity_id IS the device_id
+                return [PSNMediaPlayer(device_config.identifier, ...)]
+
+            def device_from_entity_id(self, entity_id: str) -> str | None:
+                # For PSN, entity_id IS the device_id
+                return entity_id
+
+        :param entity_id: Entity identifier (e.g., "media_player.device_123")
+        :return: Device identifier or None
+        :raises NotImplementedError: If create_entities was overridden but this method wasn't
+        """
+        # Check if create_entities was overridden (indicating custom entity ID format)
+        create_entities_overridden = (
+            type(self).create_entities is not BaseIntegrationDriver.create_entities
+        )
+
+        if create_entities_overridden:
+            # User has custom entity creation, they must override this method too
+            device_from_entity_overridden = (
+                type(self).device_from_entity_id
+                is not BaseIntegrationDriver.device_from_entity_id
+            )
+
+            if not device_from_entity_overridden:
+                raise NotImplementedError(
+                    f"{type(self).__name__}.create_entities() is overridden but "
+                    f"device_from_entity_id() is not. When you override create_entities() "
+                    f"with a custom entity ID format, you must also override "
+                    f"device_from_entity_id() to parse your custom format. "
+                )
+
+        # Default implementation: parse standard format from create_entity_id()
+        if not entity_id or "." not in entity_id:
+            return None
+
+        # Split on period: "entity_type.device_id" or "entity_type.device_id.entity_id"
+        parts = entity_id.split(".")
+
+        if len(parts) < 2:
+            return None
+
+        # Second part is always the device_id in create_entity_id() format
+        return parts[1]
+
+    def get_entity_ids_for_device(self, device_id: str) -> list[str]:
+        """
+        Get all entity identifiers for a device.
+
+        DEFAULT IMPLEMENTATION: Queries all registered entities from the API and
+        filters them by device_id using device_from_entity_id().
+
+        This works automatically with the standard entity ID format from create_entity_id().
+        For integrations using custom entity ID formats, this will work as long as
+        device_from_entity_id() is properly overridden to parse your custom format.
+
+        Override this method only if you need:
+        - Performance optimization for integrations with many entities
+        - Special filtering logic beyond device_id matching
+        - Caching or pre-computed entity lists
+
+        Example override for performance:
+            def get_entity_ids_for_device(self, device_id: str) -> list[str]:
+                # Cache entity IDs per device for faster lookups
+                if device_id not in self._entity_cache:
+                    self._entity_cache[device_id] = [
+                        f"media_player.{device_id}",
+                        f"remote.{device_id}",
+                    ]
+                return self._entity_cache[device_id]
+
+        :param device_id: Device identifier
+        :return: List of entity identifiers for this device
+        """
+        # Query all available entities and filter by device_id
+        entity_ids = []
+
+        # Iterate through all available entities
+        for entity in self.api.available_entities:
+            # Use device_from_entity_id to extract the device from each entity
+            entity_device_id = self.device_from_entity_id(entity.id)
+            if entity_device_id == device_id:
+                entity_ids.append(entity.id)
+
+        return entity_ids
 
     # ========================================================================
     # Utility Methods

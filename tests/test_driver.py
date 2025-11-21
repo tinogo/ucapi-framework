@@ -9,7 +9,8 @@ import ucapi
 from ucapi import media_player
 
 from ucapi_framework.device import BaseDeviceInterface, DeviceEvents
-from ucapi_framework.driver import BaseIntegrationDriver
+from ucapi_framework.driver import BaseIntegrationDriver, create_entity_id
+from ucapi import EntityTypes
 
 
 @dataclass
@@ -62,17 +63,6 @@ class EntityForTests(media_player.MediaPlayer):
 class ConcreteDriver(BaseIntegrationDriver[DeviceForTests, DeviceConfigForTests]):
     """Concrete driver implementation for testing."""
 
-    def device_from_entity_id(self, entity_id: str) -> str | None:
-        """Extract device ID from entity ID."""
-        # Entity ID format: "media_player.device_id"
-        if "." in entity_id:
-            return entity_id.split(".", 1)[1]
-        return None
-
-    def get_entity_ids_for_device(self, device_id: str) -> list[str]:
-        """Get entity IDs for a device."""
-        return [f"media_player.{device_id}"]
-
     def map_device_state(self, device_state) -> media_player.States:
         """Map device state to media player state."""
         if device_state == "playing":
@@ -88,7 +78,7 @@ class ConcreteDriver(BaseIntegrationDriver[DeviceForTests, DeviceConfigForTests]
     def create_entities(
         self, device_config: DeviceConfigForTests, device: DeviceForTests
     ) -> list:
-        """Create entities for a device."""
+        """Create entities for a device - uses standard entity ID format."""
         entity = media_player.MediaPlayer(
             f"media_player.{device_config.identifier}",
             device_config.name,
@@ -96,6 +86,15 @@ class ConcreteDriver(BaseIntegrationDriver[DeviceForTests, DeviceConfigForTests]
             {media_player.Attributes.STATE: media_player.States.UNKNOWN},
         )
         return [entity]
+
+    def device_from_entity_id(self, entity_id: str) -> str | None:
+        """
+        Extract device ID from entity ID.
+
+        Overridden because create_entities is overridden.
+        Since we use the standard format (entity_type.device_id), we delegate to the parent.
+        """
+        return super().device_from_entity_id(entity_id)
 
 
 @pytest.fixture
@@ -427,6 +426,89 @@ class TestBaseIntegrationDriver:
 
         assert device_id == "dev1"
 
+    def test_device_from_entity_id_default_implementation(self, mock_loop):
+        """Test the default device_from_entity_id implementation."""
+
+        class MinimalDriver(BaseIntegrationDriver):
+            """Minimal driver using default device_from_entity_id."""
+
+            def get_entity_ids_for_device(self, device_id):
+                return [f"media_player.{device_id}"]
+
+        driver = MinimalDriver(
+            loop=mock_loop, device_class=DeviceForTests, entity_classes=[]
+        )
+
+        # Test simple format: entity_type.device_id
+        assert driver.device_from_entity_id("media_player.dev1") == "dev1"
+        assert driver.device_from_entity_id("remote.my_device") == "my_device"
+        assert driver.device_from_entity_id("light.hub_123") == "hub_123"
+
+        # Test format with sub-entity: entity_type.device_id.entity_id
+        assert driver.device_from_entity_id("light.hub_1.bedroom") == "hub_1"
+        assert (
+            driver.device_from_entity_id("media_player.receiver.zone_2") == "receiver"
+        )
+        assert (
+            driver.device_from_entity_id("switch.bridge_abc.switch_1") == "bridge_abc"
+        )
+
+        # Test invalid formats
+        assert driver.device_from_entity_id("") is None
+        assert driver.device_from_entity_id("invalid") is None
+        assert driver.device_from_entity_id("only.one") == "one"
+
+    def test_device_from_entity_id_requires_override_when_create_entities_overridden(
+        self, mock_loop
+    ):
+        """Test that overriding create_entities requires overriding device_from_entity_id."""
+
+        class DriverWithCustomEntities(BaseIntegrationDriver):
+            """Driver that overrides create_entities but not device_from_entity_id."""
+
+            def create_entities(self, device_config, device):
+                # Custom entity creation with non-standard ID format
+                return []
+
+            def get_entity_ids_for_device(self, device_id):
+                return [device_id]  # Custom format
+
+        driver = DriverWithCustomEntities(
+            loop=mock_loop, device_class=DeviceForTests, entity_classes=[]
+        )
+
+        # Should raise NotImplementedError with helpful message
+        with pytest.raises(
+            NotImplementedError,
+            match="create_entities\\(\\) is overridden but device_from_entity_id\\(\\) is not",
+        ):
+            driver.device_from_entity_id("custom_entity_id")
+
+    def test_device_from_entity_id_works_when_both_overridden(self, mock_loop):
+        """Test that both methods can be overridden together successfully."""
+
+        class DriverWithCustomFormat(BaseIntegrationDriver):
+            """Driver with custom entity ID format and matching parser."""
+
+            def create_entities(self, device_config, device):
+                # Custom format where entity_id IS the device_id
+                return []
+
+            def device_from_entity_id(self, entity_id):
+                # Custom parser for custom format
+                return entity_id  # In this format, entity_id IS device_id
+
+            def get_entity_ids_for_device(self, device_id):
+                return [device_id]
+
+        driver = DriverWithCustomFormat(
+            loop=mock_loop, device_class=DeviceForTests, entity_classes=[]
+        )
+
+        # Should work fine with both overridden
+        assert driver.device_from_entity_id("my_device_id") == "my_device_id"
+        assert driver.device_from_entity_id("account_123") == "account_123"
+
     def test_get_entity_ids_for_device(self, driver):
         """Test getting entity IDs for a device."""
         entity_ids = driver.get_entity_ids_for_device("dev1")
@@ -440,6 +522,69 @@ class TestBaseIntegrationDriver:
         assert driver.map_device_state("on") == media_player.States.ON
         assert driver.map_device_state("off") == media_player.States.OFF
         assert driver.map_device_state("unknown") == media_player.States.UNKNOWN
+
+    def test_map_device_state_default_implementation(self, mock_loop):
+        """Test the default map_device_state implementation with various inputs."""
+
+        # Create a minimal driver that uses the default implementation
+        class MinimalDriver(BaseIntegrationDriver):
+            """Minimal driver using default map_device_state."""
+
+            def device_from_entity_id(self, entity_id):
+                return entity_id.split(".")[-1]
+
+            def get_entity_ids_for_device(self, device_id):
+                return [f"media_player.{device_id}"]
+
+        driver = MinimalDriver(
+            loop=mock_loop, device_class=DeviceForTests, entity_classes=[]
+        )
+
+        # Test all media player states with exact matches
+        assert driver.map_device_state("UNAVAILABLE") == media_player.States.UNAVAILABLE
+        assert driver.map_device_state("unavailable") == media_player.States.UNAVAILABLE
+        assert driver.map_device_state("UNKNOWN") == media_player.States.UNKNOWN
+        assert driver.map_device_state("unknown") == media_player.States.UNKNOWN
+
+        # Test ON state variants
+        assert driver.map_device_state("ON") == media_player.States.ON
+        assert driver.map_device_state("on") == media_player.States.ON
+        assert driver.map_device_state("MENU") == media_player.States.ON
+        assert driver.map_device_state("menu") == media_player.States.ON
+        assert driver.map_device_state("IDLE") == media_player.States.ON
+        assert driver.map_device_state("ACTIVE") == media_player.States.ON
+        assert driver.map_device_state("READY") == media_player.States.ON
+
+        # Test OFF state variants
+        assert driver.map_device_state("OFF") == media_player.States.OFF
+        assert driver.map_device_state("off") == media_player.States.OFF
+        assert driver.map_device_state("POWER_OFF") == media_player.States.OFF
+        assert driver.map_device_state("POWERED_OFF") == media_player.States.OFF
+
+        # Test PLAYING state variants
+        assert driver.map_device_state("PLAYING") == media_player.States.PLAYING
+        assert driver.map_device_state("playing") == media_player.States.PLAYING
+        assert driver.map_device_state("PLAY") == media_player.States.PLAYING
+
+        # Test PAUSED state variants
+        assert driver.map_device_state("PAUSED") == media_player.States.PAUSED
+        assert driver.map_device_state("paused") == media_player.States.PAUSED
+        assert driver.map_device_state("PAUSE") == media_player.States.PAUSED
+
+        # Test STANDBY state variants
+        assert driver.map_device_state("STANDBY") == media_player.States.STANDBY
+        assert driver.map_device_state("standby") == media_player.States.STANDBY
+        assert driver.map_device_state("SLEEP") == media_player.States.STANDBY
+
+        # Test BUFFERING state variants
+        assert driver.map_device_state("BUFFERING") == media_player.States.BUFFERING
+        assert driver.map_device_state("buffering") == media_player.States.BUFFERING
+        assert driver.map_device_state("LOADING") == media_player.States.BUFFERING
+
+        # Test None and unrecognized states default to UNKNOWN
+        assert driver.map_device_state(None) == media_player.States.UNKNOWN
+        assert driver.map_device_state("random_state") == media_player.States.UNKNOWN
+        assert driver.map_device_state("anything") == media_player.States.UNKNOWN
 
     async def test_create_entities(self, driver):
         """Test creating entities for a device."""
@@ -459,3 +604,88 @@ class TestBaseIntegrationDriver:
         # Should not raise
         await driver.on_device_update("dev1", {"state": "playing"})
         await driver.on_device_update("dev1", None)
+
+
+class TestEntityIdHelpers:
+    """Tests for entity ID helper functions."""
+
+    def test_create_entity_id_with_enum(self):
+        """Test creating entity ID with EntityTypes enum."""
+        entity_id = create_entity_id("device_123", EntityTypes.MEDIA_PLAYER)
+        assert entity_id == "media_player.device_123"
+
+        entity_id = create_entity_id("my_device", EntityTypes.REMOTE)
+        assert entity_id == "remote.my_device"
+
+        entity_id = create_entity_id("light_1", EntityTypes.LIGHT)
+        assert entity_id == "light.light_1"
+
+    def test_create_entity_id_with_string(self):
+        """Test creating entity ID with string entity type."""
+        entity_id = create_entity_id("device_123", "media_player")
+        assert entity_id == "media_player.device_123"
+
+        entity_id = create_entity_id("my_device", "remote")
+        assert entity_id == "remote.my_device"
+
+        entity_id = create_entity_id("custom_id", "custom_type")
+        assert entity_id == "custom_type.custom_id"
+
+    def test_create_entity_id_various_device_ids(self):
+        """Test create_entity_id with various device ID formats."""
+        # Simple ID
+        assert create_entity_id("dev1", EntityTypes.MEDIA_PLAYER) == "media_player.dev1"
+
+        # ID with underscores
+        assert (
+            create_entity_id("my_device_123", EntityTypes.MEDIA_PLAYER)
+            == "media_player.my_device_123"
+        )
+
+        # ID with dashes
+        assert (
+            create_entity_id("device-abc-123", EntityTypes.REMOTE)
+            == "remote.device-abc-123"
+        )
+
+        # Numeric ID
+        assert create_entity_id("12345", EntityTypes.SWITCH) == "switch.12345"
+
+    def test_create_entity_id_with_sub_entity(self):
+        """Test creating entity ID with optional sub-entity parameter."""
+        # Hub with multiple lights
+        entity_id = create_entity_id("hub_1", EntityTypes.LIGHT, "bedroom_light")
+        assert entity_id == "light.hub_1.bedroom_light"
+
+        # Multi-zone receiver
+        entity_id = create_entity_id("receiver_abc", EntityTypes.MEDIA_PLAYER, "zone_2")
+        assert entity_id == "media_player.receiver_abc.zone_2"
+
+        # String entity type with sub-entity
+        entity_id = create_entity_id("device_123", "light", "light_1")
+        assert entity_id == "light.device_123.light_1"
+
+    def test_create_entity_id_sub_entity_with_various_formats(self):
+        """Test sub-entity parameter with various ID formats."""
+        # Numeric sub-entity
+        assert (
+            create_entity_id("hub_main", EntityTypes.LIGHT, "1") == "light.hub_main.1"
+        )
+
+        # Sub-entity with underscores
+        assert (
+            create_entity_id("hub_1", EntityTypes.SWITCH, "switch_bedroom_1")
+            == "switch.hub_1.switch_bedroom_1"
+        )
+
+        # Sub-entity with dashes
+        assert (
+            create_entity_id("hub-abc", EntityTypes.COVER, "cover-1")
+            == "cover.hub-abc.cover-1"
+        )
+
+        # Complex nested structure
+        assert (
+            create_entity_id("bridge_123", EntityTypes.SENSOR, "temp_sensor_kitchen")
+            == "sensor.bridge_123.temp_sensor_kitchen"
+        )

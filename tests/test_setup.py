@@ -1120,3 +1120,267 @@ class TestSetupFlowDiscoveryErrorHandling:
         # Should raise NotImplementedError
         with pytest.raises(NotImplementedError, match="must be overridden"):
             await setup_flow.create_device_from_discovery("test", {})
+
+
+class TestSetupFlowReturnTypes:
+    """Test the new return type flexibility for device creation methods."""
+
+    @pytest.mark.asyncio
+    async def test_manual_entry_returns_setup_error(self, config_manager, discovery):
+        """Test that manual entry can return SetupError directly."""
+
+        class ErrorReturningSetupFlow(BaseSetupFlow[DeviceConfigForTests]):
+            """Setup flow that returns errors from manual entry."""
+
+            async def create_device_from_manual_entry(self, input_values):
+                """Return error if validation fails."""
+                host = input_values.get("host", "").strip()
+                if not host:
+                    return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
+                return DeviceConfigForTests(
+                    identifier="test", name="Test", address=host
+                )
+
+            def get_manual_entry_form(self):
+                """Required abstract method."""
+                return RequestUserInput(
+                    {"en": "Manual Entry"},
+                    [
+                        {
+                            "id": "host",
+                            "label": {"en": "Host"},
+                            "field": {"text": {"value": ""}},
+                        }
+                    ],
+                )
+
+        setup_flow = ErrorReturningSetupFlow(config_manager, discovery=discovery)
+        setup_flow._setup_step = SetupSteps.MANUAL_ENTRY
+
+        # Test with missing host
+        msg = UserDataResponse(input_values={"host": ""})
+        result = await setup_flow._handle_manual_entry_response(msg)
+
+        assert isinstance(result, SetupError)
+        assert result.error_type == IntegrationSetupError.CONNECTION_REFUSED
+
+    @pytest.mark.asyncio
+    async def test_manual_entry_returns_request_user_input(
+        self, config_manager, discovery
+    ):
+        """Test that manual entry can return RequestUserInput to re-show form."""
+
+        class FormRedisplaySetupFlow(BaseSetupFlow[DeviceConfigForTests]):
+            """Setup flow that re-displays form with validation errors."""
+
+            async def create_device_from_manual_entry(self, input_values):
+                """Re-display form if validation fails."""
+                identifier = input_values.get("identifier", "").strip()
+                if not identifier:
+                    return RequestUserInput(
+                        {"en": "Invalid Input"},
+                        [
+                            {
+                                "id": "error",
+                                "label": {"en": "Error"},
+                                "field": {
+                                    "label": {
+                                        "value": {"en": "Identifier is required"}
+                                    }
+                                },
+                            },
+                            {
+                                "id": "identifier",
+                                "label": {"en": "Identifier"},
+                                "field": {"text": {"value": ""}},
+                            },
+                        ],
+                    )
+                return DeviceConfigForTests(
+                    identifier=identifier, name="Test", address="127.0.0.1"
+                )
+
+            def get_manual_entry_form(self):
+                """Required abstract method."""
+                return RequestUserInput(
+                    {"en": "Manual Entry"},
+                    [
+                        {
+                            "id": "identifier",
+                            "label": {"en": "Identifier"},
+                            "field": {"text": {"value": ""}},
+                        }
+                    ],
+                )
+
+        setup_flow = FormRedisplaySetupFlow(config_manager, discovery=discovery)
+        setup_flow._setup_step = SetupSteps.MANUAL_ENTRY
+
+        # Test with missing identifier
+        msg = UserDataResponse(input_values={"identifier": ""})
+        result = await setup_flow._handle_manual_entry_response(msg)
+
+        assert isinstance(result, RequestUserInput)
+        assert result.title == {"en": "Invalid Input"}
+        assert len(result.settings) == 2
+        assert result.settings[0]["id"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_discovery_returns_setup_error(self, config_manager, discovery):
+        """Test that discovery device creation can return SetupError directly."""
+
+        class ErrorReturningDiscoveryFlow(BaseSetupFlow[DeviceConfigForTests]):
+            """Setup flow that returns errors from discovery."""
+
+            async def create_device_from_discovery(self, device_id, additional_data):
+                """Return error if device connection fails."""
+                if device_id == "unreachable":
+                    return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
+                return DeviceConfigForTests(
+                    identifier=device_id, name=f"Device {device_id}", address="127.0.0.1"
+                )
+
+            async def create_device_from_manual_entry(self, input_values):
+                """Required abstract method."""
+                return DeviceConfigForTests(
+                    identifier="manual", name="Manual", address="127.0.0.1"
+                )
+
+            def get_manual_entry_form(self):
+                """Required abstract method."""
+                return RequestUserInput(
+                    {"en": "Manual Entry"}, [{"id": "id", "field": {"text": {"value": ""}}}]
+                )
+
+        setup_flow = ErrorReturningDiscoveryFlow(config_manager, discovery=discovery)
+        setup_flow._setup_step = SetupSteps.DISCOVER
+
+        # Test with unreachable device
+        msg = UserDataResponse(input_values={"choice": "unreachable"})
+        result = await setup_flow._handle_device_selection(msg)
+
+        assert isinstance(result, SetupError)
+        assert result.error_type == IntegrationSetupError.CONNECTION_REFUSED
+
+    @pytest.mark.asyncio
+    async def test_discovery_returns_request_user_input(self, config_manager, discovery):
+        """Test that discovery device creation can return RequestUserInput for auth."""
+
+        class AuthRequestingDiscoveryFlow(BaseSetupFlow[DeviceConfigForTests]):
+            """Setup flow that requests authentication during discovery."""
+
+            async def create_device_from_discovery(self, device_id, additional_data):
+                """Request authentication if not provided."""
+                password = additional_data.get("password")
+                if not password:
+                    return RequestUserInput(
+                        {"en": "Authentication Required"},
+                        [
+                            {
+                                "id": "password",
+                                "label": {"en": "Password"},
+                                "field": {"text": {"value": ""}},
+                            }
+                        ],
+                    )
+                return DeviceConfigForTests(
+                    identifier=device_id, name=f"Device {device_id}", address="127.0.0.1"
+                )
+
+            async def create_device_from_manual_entry(self, input_values):
+                """Required abstract method."""
+                return DeviceConfigForTests(
+                    identifier="manual", name="Manual", address="127.0.0.1"
+                )
+
+            def get_manual_entry_form(self):
+                """Required abstract method."""
+                return RequestUserInput(
+                    {"en": "Manual Entry"}, [{"id": "id", "field": {"text": {"value": ""}}}]
+                )
+
+        setup_flow = AuthRequestingDiscoveryFlow(config_manager, discovery=discovery)
+        setup_flow._setup_step = SetupSteps.DISCOVER
+
+        # Test with missing password
+        msg = UserDataResponse(input_values={"choice": "dev1"})
+        result = await setup_flow._handle_device_selection(msg)
+
+        assert isinstance(result, RequestUserInput)
+        assert result.title == {"en": "Authentication Required"}
+        assert result.settings[0]["id"] == "password"
+
+    @pytest.mark.asyncio
+    async def test_manual_entry_returns_valid_config(self, config_manager, discovery):
+        """Test that manual entry still works when returning valid config."""
+
+        class StandardSetupFlow(BaseSetupFlow[DeviceConfigForTests]):
+            """Standard setup flow that returns config."""
+
+            async def create_device_from_manual_entry(self, input_values):
+                """Return valid config."""
+                return DeviceConfigForTests(
+                    identifier="test",
+                    name="Test Device",
+                    address=input_values.get("address", "127.0.0.1"),
+                )
+
+            def get_manual_entry_form(self):
+                """Required abstract method."""
+                return RequestUserInput(
+                    {"en": "Manual Entry"},
+                    [
+                        {
+                            "id": "address",
+                            "label": {"en": "Address"},
+                            "field": {"text": {"value": ""}},
+                        }
+                    ],
+                )
+
+        setup_flow = StandardSetupFlow(config_manager, discovery=discovery)
+        setup_flow._setup_step = SetupSteps.MANUAL_ENTRY
+
+        # Test with valid input
+        msg = UserDataResponse(input_values={"address": "192.168.1.100"})
+        result = await setup_flow._handle_manual_entry_response(msg)
+
+        assert isinstance(result, SetupComplete)
+        assert config_manager.contains("test")
+
+    @pytest.mark.asyncio
+    async def test_discovery_returns_valid_config(self, config_manager, discovery):
+        """Test that discovery still works when returning valid config."""
+
+        class StandardDiscoveryFlow(BaseSetupFlow[DeviceConfigForTests]):
+            """Standard setup flow that returns config from discovery."""
+
+            async def create_device_from_discovery(self, device_id, additional_data):
+                """Return valid config."""
+                return DeviceConfigForTests(
+                    identifier=device_id,
+                    name=f"Device {device_id}",
+                    address="192.168.1.100",
+                )
+
+            async def create_device_from_manual_entry(self, input_values):
+                """Required abstract method."""
+                return DeviceConfigForTests(
+                    identifier="manual", name="Manual", address="127.0.0.1"
+                )
+
+            def get_manual_entry_form(self):
+                """Required abstract method."""
+                return RequestUserInput(
+                    {"en": "Manual Entry"}, [{"id": "id", "field": {"text": {"value": ""}}}]
+                )
+
+        setup_flow = StandardDiscoveryFlow(config_manager, discovery=discovery)
+        setup_flow._setup_step = SetupSteps.DISCOVER
+
+        # Test with valid device
+        msg = UserDataResponse(input_values={"choice": "dev1"})
+        result = await setup_flow._handle_device_selection(msg)
+
+        assert isinstance(result, SetupComplete)
+        assert config_manager.contains("dev1")

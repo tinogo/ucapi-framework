@@ -8,7 +8,7 @@ device management, and device interfaces.
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """
 
-from .driver import BaseIntegrationDriver
+from .driver import BaseIntegrationDriver, create_entity_id
 from .setup import BaseSetupFlow, SetupSteps
 from .config import BaseDeviceManager
 from .device import (
@@ -30,6 +30,7 @@ __all__ = [
     "WebSocketDevice",
     "BaseDiscovery",
     "DiscoveredDevice",
+    "create_entity_id",
 ]
 
 __version__ = "0.1.0"

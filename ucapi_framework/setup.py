@@ -505,10 +505,14 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
 
         # Create device from discovery
         try:
-            device_config = await self.create_device_from_discovery(
-                device_id, additional_data
-            )
-            return await self._finalize_device_setup(device_config, msg.input_values)
+            result = await self.create_device_from_discovery(device_id, additional_data)
+
+            # Check if the result is an error or screen to display
+            if isinstance(result, (SetupError, RequestUserInput)):
+                return result
+
+            # Otherwise it's a device config - proceed with finalization
+            return await self._finalize_device_setup(result, msg.input_values)
 
         except Exception as err:  # pylint: disable=broad-except
             _LOG.error("Setup error: %s", err)
@@ -530,8 +534,14 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         :return: Setup action
         """
         try:
-            device_config = await self.create_device_from_manual_entry(msg.input_values)
-            return await self._finalize_device_setup(device_config, msg.input_values)
+            result = await self.create_device_from_manual_entry(msg.input_values)
+
+            # Check if the result is an error or screen to display
+            if isinstance(result, (SetupError, RequestUserInput)):
+                return result
+
+            # Otherwise it's a device config - proceed with finalization
+            return await self._finalize_device_setup(result, msg.input_values)
 
         except Exception as err:  # pylint: disable=broad-except
             _LOG.error("Setup error: %s", err)
@@ -685,12 +695,49 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
     @abstractmethod
     async def create_device_from_manual_entry(
         self, input_values: dict[str, Any]
-    ) -> ConfigT:
+    ) -> ConfigT | SetupError | RequestUserInput:
         """
         Create device configuration from manual entry.
 
-        :param input_values: User input values
-        :return: Device configuration
+        This method can return:
+        - ConfigT: A valid device configuration to proceed with setup
+        - SetupError: An error to abort the setup with an error message
+        - RequestUserInput: A screen to display (e.g., to re-show the form with validation errors)
+
+        Example - Validation with form re-display:
+            async def create_device_from_manual_entry(self, input_values):
+                host = input_values.get("host", "").strip()
+                if not host:
+                    # Show the form again with an error message
+                    return RequestUserInput(
+                        {"en": "Invalid Input"},
+                        [
+                            {
+                                "id": "error",
+                                "label": {"en": "Error"},
+                                "field": {"label": {"value": {"en": "Host is required"}}}
+                            },
+                            # ... rest of the form fields
+                        ]
+                    )
+                return MyDeviceConfig(host=host, ...)
+
+        Example - Return error:
+            async def create_device_from_manual_entry(self, input_values):
+                host = input_values.get("host")
+                if not self._validate_host(host):
+                    return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
+                return MyDeviceConfig(host=host, ...)
+
+        Example - Raise exception (alternative approach):
+            async def create_device_from_manual_entry(self, input_values):
+                host = input_values.get("host")
+                if not host:
+                    raise ValueError("Host is required")
+                return MyDeviceConfig(host=host, ...)
+
+        :param input_values: User input values from the manual entry form
+        :return: Device configuration, SetupError, or RequestUserInput to re-display form
         """
 
     @abstractmethod
@@ -742,7 +789,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
 
     async def create_device_from_discovery(
         self, device_id: str, additional_data: dict[str, Any]
-    ) -> ConfigT:
+    ) -> ConfigT | SetupError | RequestUserInput:
         """
         Create device configuration from discovered device.
 
@@ -754,9 +801,31 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         dropdown. If you pass a discovery_class to __init__, you MUST override
         this method to create a configuration from the discovered device data.
 
+        This method can return:
+        - ConfigT: A valid device configuration to proceed with setup
+        - SetupError: An error to abort the setup with an error message
+        - RequestUserInput: A screen to display (e.g., for additional validation or authentication)
+
+        Example - Validation with error:
+            async def create_device_from_discovery(self, device_id, additional_data):
+                device = await self.discovery.get_device(device_id)
+                if not await device.test_connection():
+                    return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
+                return MyDeviceConfig.from_discovered(device)
+
+        Example - Show authentication screen:
+            async def create_device_from_discovery(self, device_id, additional_data):
+                device = await self.discovery.get_device(device_id)
+                if device.requires_auth and not additional_data.get("password"):
+                    return RequestUserInput(
+                        {"en": "Authentication Required"},
+                        [{"id": "password", "label": {"en": "Password"}, "field": {"text": {"value": ""}}}]
+                    )
+                return MyDeviceConfig.from_discovered(device)
+
         :param device_id: Discovered device identifier
         :param additional_data: Additional user input data
-        :return: Device configuration
+        :return: Device configuration, SetupError, or RequestUserInput
         :raises NotImplementedError: If not overridden when discovery_class is provided
         """
         if self.discovery is None:
