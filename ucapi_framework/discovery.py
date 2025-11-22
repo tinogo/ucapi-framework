@@ -67,6 +67,19 @@ class BaseDiscovery(ABC):
         self.timeout = timeout
         self._discovered_devices: list[DiscoveredDevice] = []
 
+    @property
+    def devices(self) -> list[DiscoveredDevice]:
+        """
+        Get the list of discovered devices from the last discovery run.
+
+        This property provides access to devices found by the most recent
+        call to discover(). Useful when implementing create_device_from_discovery()
+        in setup flows.
+
+        :return: List of discovered devices
+        """
+        return self._discovered_devices
+
     @abstractmethod
     async def discover(self) -> list[DiscoveredDevice]:
         """

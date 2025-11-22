@@ -111,6 +111,25 @@ class TestBaseDiscovery:
 
         assert discovery._discovered_devices == []
 
+    @pytest.mark.asyncio
+    async def test_devices_property(self):
+        """Test devices property returns discovered devices."""
+        discovery = ConcreteDiscovery()
+        
+        # Initially empty
+        assert discovery.devices == []
+        
+        # After discovery, devices are accessible
+        await discovery.discover()
+        
+        assert len(discovery.devices) == 2
+        assert discovery.devices[0].identifier == "dev1"
+        assert discovery.devices[1].identifier == "dev2"
+        
+        # Clear and verify
+        discovery.clear()
+        assert discovery.devices == []
+
 
 class ConcreteSSDPDiscovery(SSDPDiscovery):
     """Concrete SSDP discovery for testing."""

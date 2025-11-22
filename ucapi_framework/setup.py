@@ -412,41 +412,12 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             # No discovery available, go straight to manual entry
             return await self._handle_manual_entry()
 
-        # Attempt discovery
+        # Attempt discovery (results are stored in self.discovery.devices)
         discovered_devices = await self.discover_devices()
 
         if discovered_devices:
             _LOG.debug("Found %d device(s)", len(discovered_devices))
-
-            dropdown_devices = []
-            for device in discovered_devices:
-                dropdown_devices.append(
-                    {
-                        "id": device.identifier,
-                        "label": {"en": f"{device.name} ({device.address})"},
-                    }
-                )
-
-            # Add manual entry option
-            dropdown_devices.append({"id": "manual", "label": {"en": "Setup Manually"}})
-
-            fields = [
-                {
-                    "field": {
-                        "dropdown": {
-                            "value": dropdown_devices[0]["id"],
-                            "items": dropdown_devices,
-                        }
-                    },
-                    "id": "choice",
-                    "label": {"en": "Discovered Devices"},
-                }
-            ]
-
-            # Add any additional discovery fields
-            fields.extend(self.get_additional_discovery_fields())
-
-            return RequestUserInput({"en": "Discovered Devices"}, fields)
+            return await self.get_discovered_devices_screen(discovered_devices)
 
         # No devices found, show manual entry
         return await self._handle_manual_entry()
@@ -801,27 +772,52 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         dropdown. If you pass a discovery_class to __init__, you MUST override
         this method to create a configuration from the discovered device data.
 
+        The framework has already performed discovery and stored the results.
+        Use self.get_discovered_devices() or self.discovery.devices to access the
+        full list of discovered devices.
+
         This method can return:
         - ConfigT: A valid device configuration to proceed with setup
         - SetupError: An error to abort the setup with an error message
         - RequestUserInput: A screen to display (e.g., for additional validation or authentication)
 
-        Example - Validation with error:
+        Example - Basic usage (recommended):
             async def create_device_from_discovery(self, device_id, additional_data):
-                device = await self.discovery.get_device(device_id)
-                if not await device.test_connection():
+                # Look up the device by identifier
+                discovered = self.get_discovered_devices(device_id)
+                if not discovered:
+                    return SetupError(error_type=IntegrationSetupError.NOT_FOUND)
+
+                return MyDeviceConfig(
+                    identifier=discovered.identifier,
+                    name=discovered.name,
+                    address=discovered.address,
+                    port=discovered.extra_data.get("port", 80)
+                )
+
+        Example - With validation:
+            async def create_device_from_discovery(self, device_id, additional_data):
+                discovered = self.get_discovered_devices(device_id)
+                if not discovered:
+                    return SetupError(error_type=IntegrationSetupError.NOT_FOUND)
+                
+                if not await self._test_connection(discovered.address):
                     return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
-                return MyDeviceConfig.from_discovered(device)
+                
+                return MyDeviceConfig.from_discovered(discovered)
 
         Example - Show authentication screen:
             async def create_device_from_discovery(self, device_id, additional_data):
-                device = await self.discovery.get_device(device_id)
-                if device.requires_auth and not additional_data.get("password"):
+                discovered = self.get_discovered_devices(device_id)
+                if not discovered:
+                    return SetupError(error_type=IntegrationSetupError.NOT_FOUND)
+
+                if discovered.extra_data.get("requires_auth") and not additional_data.get("password"):
                     return RequestUserInput(
                         {"en": "Authentication Required"},
                         [{"id": "password", "label": {"en": "Password"}, "field": {"text": {"value": ""}}}]
                     )
-                return MyDeviceConfig.from_discovered(device)
+                return MyDeviceConfig.from_discovered(discovered, additional_data.get("password"))
 
         :param device_id: Discovered device identifier
         :param additional_data: Additional user input data
@@ -852,6 +848,61 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             f"{self.__class__.__name__}.create_device_from_discovery() must be "
             f"overridden when using discovery_class ({type(self.discovery).__name__})"
         )
+
+    # ========================================================================
+    # Helper Methods
+    # ========================================================================
+
+    def get_discovered_devices(
+        self, identifier: str | None = None
+    ) -> list[DiscoveredDevice] | DiscoveredDevice | None:
+        """
+        Get discovered devices from the last discovery run.
+
+        This is a convenience method that returns devices found by the framework's
+        automatic discovery. Use this in your create_device_from_discovery()
+        implementation to access device details.
+
+        This is equivalent to accessing self.discovery.devices directly.
+
+        :param identifier: Optional device identifier to look up a specific device.
+                          If provided, returns the matching DiscoveredDevice or None.
+                          If omitted, returns the full list of devices.
+        :return: If identifier provided: DiscoveredDevice or None
+                If no identifier: List of all discovered devices (empty if none found)
+
+        Example - Get specific device:
+            async def create_device_from_discovery(self, device_id, additional_data):
+                discovered = self.get_discovered_devices(device_id)
+                if not discovered:
+                    return SetupError(error_type=IntegrationSetupError.NOT_FOUND)
+
+                return MyDeviceConfig(
+                    identifier=discovered.identifier,
+                    name=discovered.name,
+                    address=discovered.address,
+                    port=discovered.extra_data.get("port", 80)
+                )
+
+        Example - Get all devices:
+            async def create_device_from_discovery(self, device_id, additional_data):
+                for device in self.get_discovered_devices():
+                    if device.identifier == device_id:
+                        return MyDeviceConfig.from_discovered(device)
+                return SetupError(error_type=IntegrationSetupError.NOT_FOUND)
+        """
+        if self.discovery is None:
+            return None if identifier else []
+
+        if identifier is not None:
+            # Look up specific device
+            return next(
+                (d for d in self.discovery.devices if d.identifier == identifier),
+                None,
+            )
+
+        # Return all devices
+        return self.discovery.devices
 
     # ========================================================================
     # Optional Override Methods
@@ -900,6 +951,104 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             f"Device config {type(device_config).__name__} has no 'name', 'friendly_name', or 'device_name' attribute. "
             f"Override get_device_name() to specify which attribute to use."
         )
+
+    def format_discovered_device_label(self, device: DiscoveredDevice) -> str:
+        """
+        Format how a discovered device appears in the dropdown list.
+
+        Override this method to customize how devices are displayed to users
+        during discovery. The default format shows the device name and address.
+
+        :param device: The discovered device to format
+        :return: Formatted label string
+
+        Example - Include model information:
+            def format_discovered_device_label(self, device):
+                model = device.extra_data.get("model", "Unknown")
+                return f"{device.name} - {model} ({device.address})"
+
+        Example - Show additional details:
+            def format_discovered_device_label(self, device):
+                version = device.extra_data.get("version", "")
+                return f"{device.name} [{version}] at {device.address}"
+        """
+        return f"{device.name} ({device.address})"
+
+    async def get_discovered_devices_screen(
+        self, devices: list[DiscoveredDevice]
+    ) -> RequestUserInput:
+        """
+        Build the discovered devices selection screen.
+
+        Override this method to completely customize the discovery screen layout,
+        such as adding additional fields, changing the title, or using a different
+        input type.
+
+        The default implementation creates a dropdown with all discovered devices
+        (using format_discovered_device_label for labels), plus a "Setup Manually"
+        option, and includes any additional fields from get_additional_discovery_fields().
+
+        The selected device's identifier will be passed to create_device_from_discovery().
+
+        :param devices: List of discovered devices
+        :return: RequestUserInput screen to show to the user
+
+        Example - Custom screen with additional fields:
+            async def get_discovered_devices_screen(self, devices):
+                dropdown_items = [
+                    {
+                        "id": d.identifier,
+                        "label": {"en": self.format_discovered_device_label(d)}
+                    }
+                    for d in devices
+                ]
+                dropdown_items.append({"id": "manual", "label": {"en": "Manual Setup"}})
+
+                return RequestUserInput(
+                    {"en": "Select Your Device"},
+                    [
+                        {
+                            "id": "choice",
+                            "label": {"en": "Available Devices"},
+                            "field": {"dropdown": {"value": dropdown_items[0]["id"], "items": dropdown_items}}
+                        },
+                        {
+                            "id": "zone",
+                            "label": {"en": "Default Zone"},
+                            "field": {"number": {"value": 1, "min": 1, "max": 10}}
+                        }
+                    ]
+                )
+        """
+        dropdown_devices = []
+        for device in devices:
+            dropdown_devices.append(
+                {
+                    "id": device.identifier,
+                    "label": {"en": self.format_discovered_device_label(device)},
+                }
+            )
+
+        # Add manual entry option
+        dropdown_devices.append({"id": "manual", "label": {"en": "Setup Manually"}})
+
+        fields = [
+            {
+                "field": {
+                    "dropdown": {
+                        "value": dropdown_devices[0]["id"],
+                        "items": dropdown_devices,
+                    }
+                },
+                "id": "choice",
+                "label": {"en": "Discovered Devices"},
+            }
+        ]
+
+        # Add any additional discovery fields
+        fields.extend(self.get_additional_discovery_fields())
+
+        return RequestUserInput({"en": "Discovered Devices"}, fields)
 
     def get_additional_discovery_fields(self) -> list[dict]:
         """
