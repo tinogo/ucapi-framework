@@ -14,6 +14,12 @@ for integrations that don't use them. Install only what you need:
     - Used by: SSDPDiscovery class
     - Import fails with helpful message if not installed
 
+**SDDP Discovery** (Samsung TVs and similar devices):
+    - Package: sddp-discovery-protocol
+    - Install: pip install sddp-discovery-protocol
+    - Used by: SDDPDiscovery class
+    - Import fails with helpful message if not installed
+
 **mDNS/Bonjour Discovery** (Apple devices, Chromecast, IoT):
     - Package: zeroconf
     - Install: pip install zeroconf
@@ -188,6 +194,128 @@ class SSDPDiscovery(BaseDiscovery):
         Override this method to extract device information from SSDP response.
 
         :param raw_device: Raw SSDP device data
+        :return: DiscoveredDevice or None if parsing fails
+        """
+
+
+class SDDPDiscovery(BaseDiscovery):
+    """
+    SDDP-based device discovery.
+
+    Uses Simple Device Discovery Protocol (similar to SSDP but with different format).
+    Good for: Samsung TVs and other devices using SDDP protocol
+    """
+
+    def __init__(
+        self,
+        search_pattern: str = "*",
+        timeout: int = 5,
+        multicast_address: str | None = None,
+        multicast_port: int | None = None,
+        bind_addresses: list[str] | None = None,
+        include_loopback: bool = False,
+    ):
+        """
+        Initialize SDDP discovery.
+
+        :param search_pattern: SDDP search pattern (default: "*" for all devices)
+        :param timeout: Discovery timeout in seconds
+        :param multicast_address: SDDP multicast address (uses default if None)
+        :param multicast_port: SDDP multicast port (uses default if None)
+        :param bind_addresses: Optional list of specific addresses to bind to
+        :param include_loopback: Whether to include loopback interface
+        """
+        super().__init__(timeout)
+        self.search_pattern = search_pattern
+        self.multicast_address = multicast_address
+        self.multicast_port = multicast_port
+        self.bind_addresses = bind_addresses
+        self.include_loopback = include_loopback
+
+    async def discover(self) -> list[DiscoveredDevice]:
+        """
+        Perform SDDP discovery.
+
+        :return: List of discovered devices
+        """
+        _LOG.info(
+            "Starting SDDP discovery (pattern: %s, timeout: %ds)",
+            self.search_pattern,
+            self.timeout,
+        )
+
+        try:
+            try:
+                import sddp_discovery_protocol as sddp  # type: ignore[import-not-found]
+                from sddp_discovery_protocol.constants import (  # type: ignore[import-not-found]
+                    SDDP_MULTICAST_ADDRESS,
+                    SDDP_PORT,
+                )
+            except ImportError as err:
+                raise ImportError(
+                    "sddp-discovery-protocol package is required for SDDP discovery. "
+                    "Install it with: pip install sddp-discovery-protocol"
+                ) from err
+
+            # Use defaults if not specified
+            multicast_address = self.multicast_address or SDDP_MULTICAST_ADDRESS
+            multicast_port = self.multicast_port or SDDP_PORT
+
+            self._discovered_devices.clear()
+
+            async with sddp.SddpClient(
+                search_pattern=self.search_pattern,
+                response_wait_time=self.timeout,
+                multicast_address=multicast_address,
+                multicast_port=multicast_port,
+                bind_addresses=self.bind_addresses,
+                include_loopback=self.include_loopback,
+            ) as client:
+                async with client.search(
+                    search_pattern=self.search_pattern,
+                    response_wait_time=self.timeout,
+                ) as search_request:
+                    async for response_info in search_request.iter_responses():
+                        device = self.parse_sddp_response(
+                            response_info.datagram, response_info
+                        )
+                        if device:
+                            self._discovered_devices.append(device)
+
+            _LOG.info(
+                "SDDP discovery complete: found %d device(s)",
+                len(self._discovered_devices),
+            )
+
+        except Exception as err:  # pylint: disable=broad-exception-caught
+            _LOG.error("SDDP discovery error: %s", err)
+
+        return self._discovered_devices
+
+    @abstractmethod
+    def parse_sddp_response(
+        self, datagram: Any, response_info: Any
+    ) -> DiscoveredDevice | None:
+        """
+        Parse SDDP response into DiscoveredDevice.
+
+        Override this method to extract device information from SDDP response.
+        The datagram contains device information in its headers (hdr_from, hdr_type, etc.).
+
+        Example implementation:
+            def parse_sddp_response(self, datagram, response_info):
+                return DiscoveredDevice(
+                    identifier=datagram.hdr_type,  # or other unique field
+                    name=datagram.hdr_type,
+                    address=datagram.hdr_from[0],  # IP address
+                    extra_data={
+                        "type": datagram.hdr_type,
+                        "datagram": datagram,
+                    }
+                )
+
+        :param datagram: SDDP datagram with headers (hdr_from, hdr_type, etc.)
+        :param response_info: Full response info object from SDDP client
         :return: DiscoveredDevice or None if parsing fails
         """
 

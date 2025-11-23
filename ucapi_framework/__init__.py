@@ -8,6 +8,7 @@ Optional Dependencies
 ---------------------
 The discovery module supports optional dependencies for different discovery methods:
 - ssdpy: For SSDP/UPnP discovery (pip install ssdpy)
+- sddp-discovery-protocol: For SDDP discovery (pip install sddp-discovery-protocol)
 - zeroconf: For mDNS/Bonjour discovery (pip install zeroconf)
 
 These are only required if you use the corresponding discovery classes.

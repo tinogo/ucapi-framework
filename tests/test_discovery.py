@@ -10,6 +10,7 @@ from ucapi_framework.discovery import (
     BaseDiscovery,
     DiscoveredDevice,
     SSDPDiscovery,
+    SDDPDiscovery,
     MDNSDiscovery,
 )
 
@@ -241,6 +242,179 @@ class TestSSDPDiscovery:
             devices = await discovery.discover()
             # Should return empty list on import error
             assert devices == []
+
+
+class ConcreteSDDPDiscovery(SDDPDiscovery):
+    """Concrete SDDP discovery for testing."""
+
+    def parse_sddp_response(self, datagram, response_info):
+        """Parse SDDP response."""
+        try:
+            return DiscoveredDevice(
+                identifier=datagram.hdr_type,
+                name=datagram.hdr_type,
+                address=datagram.hdr_from[0],
+                extra_data={
+                    "type": datagram.hdr_type,
+                    "raw_datagram": datagram,
+                },
+            )
+        except (AttributeError, IndexError):
+            return None
+
+
+class TestSDDPDiscovery:
+    """Tests for SDDPDiscovery."""
+
+    def test_init(self):
+        """Test SDDP discovery initialization."""
+        discovery = ConcreteSDDPDiscovery(
+            search_pattern="urn:samsung.com:device:RemoteControlReceiver:1",
+            timeout=10,
+        )
+
+        assert discovery.search_pattern == "urn:samsung.com:device:RemoteControlReceiver:1"
+        assert discovery.timeout == 10
+
+    def test_default_search_pattern(self):
+        """Test default search pattern."""
+        discovery = ConcreteSDDPDiscovery()
+
+        assert discovery.search_pattern == "*"
+
+    @pytest.mark.asyncio
+    async def test_discover_with_sddp(self):
+        """Test SDDP discovery with mocked SDDP client."""
+        # Mock datagram
+        mock_datagram1 = Mock()
+        mock_datagram1.hdr_type = "urn:samsung.com:device:TV:1"
+        mock_datagram1.hdr_from = ["192.168.1.100", 1900]
+
+        mock_datagram2 = Mock()
+        mock_datagram2.hdr_type = "urn:samsung.com:device:TV:2"
+        mock_datagram2.hdr_from = ["192.168.1.101", 1900]
+
+        mock_response_info1 = Mock()
+        mock_response_info1.datagram = mock_datagram1
+
+        mock_response_info2 = Mock()
+        mock_response_info2.datagram = mock_datagram2
+
+        # Mock async context managers
+        mock_search_request = AsyncMock()
+        mock_search_request.__aenter__ = AsyncMock(return_value=mock_search_request)
+        mock_search_request.__aexit__ = AsyncMock(return_value=None)
+
+        async def mock_iter_responses():
+            yield mock_response_info1
+            yield mock_response_info2
+
+        mock_search_request.iter_responses = mock_iter_responses
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client.search = Mock(return_value=mock_search_request)
+
+        mock_sddp_module = Mock()
+        mock_sddp_module.SddpClient = Mock(return_value=mock_client)
+
+        mock_constants_module = Mock()
+        mock_constants_module.SDDP_MULTICAST_ADDRESS = "239.255.255.250"
+        mock_constants_module.SDDP_PORT = 1902
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "sddp_discovery_protocol": mock_sddp_module,
+                "sddp_discovery_protocol.constants": mock_constants_module,
+            },
+        ):
+            discovery = ConcreteSDDPDiscovery()
+            devices = await discovery.discover()
+
+            assert len(devices) == 2
+            assert devices[0].identifier == "urn:samsung.com:device:TV:1"
+            assert devices[0].address == "192.168.1.100"
+            assert devices[1].identifier == "urn:samsung.com:device:TV:2"
+            assert devices[1].address == "192.168.1.101"
+
+    @pytest.mark.asyncio
+    async def test_discover_handles_import_error(self):
+        """Test that discover handles missing sddp-discovery-protocol gracefully."""
+        discovery = ConcreteSDDPDiscovery()
+
+        # Patch the import to raise ImportError
+        def mock_import(name, *args, **kwargs):
+            if name == "sddp_discovery_protocol":
+                raise ImportError("No module named 'sddp_discovery_protocol'")
+            return __import__(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=mock_import):
+            devices = await discovery.discover()
+            # Should return empty list on import error
+            assert devices == []
+
+    @pytest.mark.asyncio
+    async def test_discover_with_custom_parameters(self):
+        """Test SDDP discovery with custom multicast parameters."""
+        mock_datagram = Mock()
+        mock_datagram.hdr_type = "test-device"
+        mock_datagram.hdr_from = ["10.0.0.1", 1902]
+
+        mock_response_info = Mock()
+        mock_response_info.datagram = mock_datagram
+
+        mock_search_request = AsyncMock()
+        mock_search_request.__aenter__ = AsyncMock(return_value=mock_search_request)
+        mock_search_request.__aexit__ = AsyncMock(return_value=None)
+
+        async def mock_iter_responses():
+            yield mock_response_info
+
+        mock_search_request.iter_responses = mock_iter_responses
+
+        mock_client = AsyncMock()
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=None)
+        mock_client.search = Mock(return_value=mock_search_request)
+
+        mock_sddp_module = Mock()
+
+        # Capture the parameters passed to SddpClient
+        captured_params = {}
+
+        def mock_sddp_client(**kwargs):
+            captured_params.update(kwargs)
+            return mock_client
+
+        mock_sddp_module.SddpClient = mock_sddp_client
+
+        mock_constants_module = Mock()
+        mock_constants_module.SDDP_MULTICAST_ADDRESS = "239.255.255.250"
+        mock_constants_module.SDDP_PORT = 1902
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "sddp_discovery_protocol": mock_sddp_module,
+                "sddp_discovery_protocol.constants": mock_constants_module,
+            },
+        ):
+            discovery = ConcreteSDDPDiscovery(
+                multicast_address="239.0.0.1",
+                multicast_port=9999,
+                bind_addresses=["192.168.1.1"],
+                include_loopback=True,
+            )
+            await discovery.discover()
+
+            # Verify custom parameters were passed
+            assert captured_params["multicast_address"] == "239.0.0.1"
+            assert captured_params["multicast_port"] == 9999
+            assert captured_params["bind_addresses"] == ["192.168.1.1"]
+            assert captured_params["include_loopback"] is True
+            assert len(discovery.devices) == 1
 
 
 class ConcreteMDNSDiscovery(MDNSDiscovery):
