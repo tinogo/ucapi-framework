@@ -4,6 +4,15 @@ Base classes and utilities for Unfolded Circle Remote integrations.
 This module provides reusable base classes for integration drivers, setup flows,
 device management, and device interfaces.
 
+Optional Dependencies
+---------------------
+The discovery module supports optional dependencies for different discovery methods:
+- ssdpy: For SSDP/UPnP discovery (pip install ssdpy)
+- zeroconf: For mDNS/Bonjour discovery (pip install zeroconf)
+
+These are only required if you use the corresponding discovery classes.
+See ucapi_framework.discovery module documentation for details.
+
 :copyright: (c) 2025 by Jack Powell.
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """

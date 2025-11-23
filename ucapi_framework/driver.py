@@ -23,6 +23,30 @@ ConfigT = TypeVar("ConfigT")  # Device configuration type (any object with attri
 
 _LOG = logging.getLogger(__name__)
 
+# Common attribute names for device configuration extraction
+_DEVICE_ID_ATTRIBUTES = ("identifier", "id", "device_id")
+_DEVICE_NAME_ATTRIBUTES = ("name", "friendly_name", "device_name")
+_DEVICE_ADDRESS_ATTRIBUTES = ("address", "host_address", "ip_address", "device_address", "host")
+
+
+def _get_first_valid_attr(obj: Any, *attrs: str) -> str | None:
+    """
+    Get the first valid attribute value from an object.
+
+    Helper function to extract configuration values by trying multiple
+    common attribute names in order.
+
+    :param obj: Object to inspect
+    :param attrs: Attribute names to try in order
+    :return: String value of first found attribute, or None
+    """
+    for attr in attrs:
+        if hasattr(obj, attr):
+            value = getattr(obj, attr)
+            if value:
+                return str(value)
+    return None
+
 
 def create_entity_id(
     device_id: str, entity_type: EntityTypes | str, entity_id: str | None = None
@@ -440,11 +464,9 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         :return: Device identifier
         :raises AttributeError: If no valid ID attribute is found
         """
-        for attr in ("identifier", "id", "device_id"):
-            if hasattr(device_config, attr):
-                value = getattr(device_config, attr)
-                if value:
-                    return str(value)
+        value = _get_first_valid_attr(device_config, *_DEVICE_ID_ATTRIBUTES)
+        if value:
+            return value
 
         raise AttributeError(
             f"Device config {type(device_config).__name__} has no 'identifier', 'id', or 'device_id' attribute. "
@@ -462,11 +484,9 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         :return: Device name
         :raises AttributeError: If no valid name attribute is found
         """
-        for attr in ("name", "friendly_name", "device_name"):
-            if hasattr(device_config, attr):
-                value = getattr(device_config, attr)
-                if value:
-                    return str(value)
+        value = _get_first_valid_attr(device_config, *_DEVICE_NAME_ATTRIBUTES)
+        if value:
+            return value
 
         raise AttributeError(
             f"Device config {type(device_config).__name__} has no 'name', 'friendly_name', or 'device_name' attribute. "
@@ -477,24 +497,19 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         """
         Extract device address from device configuration.
 
+        Default implementation: tries common attribute names (address, host_address, ip_address, device_address, host).
+        Override this if your config uses a different attribute name.
+
         :param device_config: Device configuration
         :return: Device address
+        :raises AttributeError: If no valid address attribute is found
         """
-
-        for attr in (
-            "address",
-            "host_address",
-            "ip_address",
-            "device_address",
-            "host",
-        ):
-            if hasattr(device_config, attr):
-                value = getattr(device_config, attr)
-                if value:
-                    return str(value)
+        value = _get_first_valid_attr(device_config, *_DEVICE_ADDRESS_ATTRIBUTES)
+        if value:
+            return value
 
         raise AttributeError(
-            f"Device config {type(device_config).__name__} has no 'address', 'friendly_address', 'ip_address', 'device_address', or 'host' attribute. "
+            f"Device config {type(device_config).__name__} has no 'address', 'host_address', 'ip_address', 'device_address', or 'host' attribute. "
             f"Override get_device_address() to specify which attribute to use."
         )
 

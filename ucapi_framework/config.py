@@ -12,8 +12,7 @@ import json
 import logging
 import os
 from abc import ABC, abstractmethod
-from asyncio import Lock
-from typing import Callable, Generic, Iterator, TypeVar
+from typing import Any, Callable, Generic, Iterator, TypeVar
 
 _LOG = logging.getLogger(__name__)
 
@@ -24,9 +23,27 @@ DeviceT = TypeVar("DeviceT")
 
 
 class _EnhancedJSONEncoder(json.JSONEncoder):
-    """Python dataclass json encoder."""
+    """
+    Custom JSON encoder with support for dataclass serialization.
 
-    def default(self, o):
+    The standard json.JSONEncoder doesn't know how to serialize dataclasses.
+    This encoder extends it to automatically convert dataclass instances to
+    dictionaries using dataclasses.asdict(), enabling seamless JSON persistence
+    of device configurations.
+
+    This is preferred over manual dict conversion because:
+    - Automatic serialization of nested dataclasses
+    - Type safety maintained through dataclass definitions
+    - No need to manually implement to_dict() on every config class
+    """
+
+    def default(self, o: Any) -> Any:
+        """
+        Override default serialization for unsupported types.
+
+        :param o: Object to serialize
+        :return: JSON-serializable representation
+        """
         if dataclasses.is_dataclass(o):
             return dataclasses.asdict(o)
         return super().default(o)
@@ -64,7 +81,6 @@ class BaseDeviceManager(ABC, Generic[DeviceT]):
         self._config: list[DeviceT] = []
         self._add_handler = add_handler
         self._remove_handler = remove_handler
-        self._config_lock = Lock()
         self.load()
 
     @property

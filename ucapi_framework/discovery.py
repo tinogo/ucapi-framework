@@ -3,12 +3,26 @@ Base discovery classes for Unfolded Circle Remote integrations.
 
 Provides base classes and protocols for device discovery.
 
-Optional Dependencies:
-    - ssdpy: Required only if using SSDPDiscovery
-    - zeroconf: Required only if using ZeroconfDiscovery
+Optional Dependencies
+---------------------
+This module uses lazy imports to avoid requiring discovery dependencies
+for integrations that don't use them. Install only what you need:
 
-The imports are lazy-loaded, so integrations that don't use discovery
-don't need to install these dependencies.
+**SSDP Discovery** (UPnP, media renderers, smart TVs):
+    - Package: ssdpy
+    - Install: pip install ssdpy
+    - Used by: SSDPDiscovery class
+    - Import fails with helpful message if not installed
+
+**mDNS/Bonjour Discovery** (Apple devices, Chromecast, IoT):
+    - Package: zeroconf
+    - Install: pip install zeroconf
+    - Used by: MDNSDiscovery class
+    - Import fails with helpful message if not installed
+
+**No Discovery** (Manual entry only):
+    - Pass discovery=None to setup flow
+    - No additional dependencies required
 
 :copyright: (c) 2025 by Jack Powell.
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
