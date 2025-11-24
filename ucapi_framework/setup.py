@@ -547,13 +547,31 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             # If it returns a device config (ConfigT), replace pending and save
             # This allows returning a new/modified device config to complete setup
             if result is not None and not isinstance(result, SetupComplete):
-                # User returned a device config - use it as the final config
+                # Validate that it's an instance, not a type/class
+                if isinstance(result, type):
+                    _LOG.error(
+                        "handle_additional_configuration_response returned a class (%s) instead of an instance. "
+                        "Did you forget to instantiate the device config? "
+                        "Use: return MyDeviceConfig(...) instead of: return MyDeviceConfig",
+                        result.__name__
+                    )
+                    self._pending_device_config = None
+                    return SetupError(error_type=IntegrationSetupError.OTHER)
+                
+                # User returned a device config instance - use it as the final config
                 self._pending_device_config = result
 
             # At this point: result is None, SetupComplete, or we just set pending_device_config
             if self._pending_device_config is None:
                 _LOG.error("Pending device config is None during finalization")
                 return SetupError(error_type=IntegrationSetupError.OTHER)
+
+            # Debug logging
+            _LOG.debug(
+                "Saving device config: type=%s, is_instance=%s",
+                type(self._pending_device_config).__name__,
+                not isinstance(self._pending_device_config, type)
+            )
 
             # Save the device and complete
             self.config.add_or_update(self._pending_device_config)
@@ -565,7 +583,15 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             return SetupComplete()
 
         except Exception as err:  # pylint: disable=broad-except
+            import traceback
             _LOG.error("Error in additional configuration: %s", err)
+            _LOG.error("Error details: %s", traceback.format_exc())
+            if self._pending_device_config is not None:
+                _LOG.error(
+                    "Pending device config type: %s, repr: %s",
+                    type(self._pending_device_config),
+                    repr(self._pending_device_config)[:200]
+                )
             self._pending_device_config = None
             return SetupError(error_type=IntegrationSetupError.OTHER)
 

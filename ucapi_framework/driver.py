@@ -102,19 +102,26 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         self,
         loop: asyncio.AbstractEventLoop,
         device_class: type[DeviceT],
-        entity_classes: list[type],
+        entity_classes: list[EntityTypes] | EntityTypes,
     ):
         """
         Initialize the integration driver.
 
         :param loop: The asyncio event loop
         :param device_class: The device interface class to instantiate
-        :param entity_classes: List of entity classes to create (e.g., [MediaPlayer, Remote])
+        :param entity_classes: EntityTypes or list of EntityTypes (e.g., EntityTypes.MEDIA_PLAYER)
+                               Single EntityTypes value will be converted to a list
         """
         self.api = uc.IntegrationAPI(loop)
         self._loop = loop
         self._device_class = device_class
-        self._entity_classes = entity_classes
+        
+        # Allow passing a single EntityTypes or a list
+        if isinstance(entity_classes, EntityTypes):
+            self._entity_classes = [entity_classes]
+        else:
+            self._entity_classes = entity_classes
+            
         self._configured_devices: dict[str, DeviceT] = {}
         self.config = None  # Will be set by integration after initialization
         self._setup_event_handlers()
@@ -587,6 +594,10 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         if device_state is None:
             return media_player.States.UNKNOWN
 
+        # If already a media_player.States enum, return it directly
+        if isinstance(device_state, media_player.States):
+            return device_state
+
         # Convert to uppercase string for comparison
         state_str = str(device_state).upper()
 
@@ -597,9 +608,9 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
                 return media_player.States.UNKNOWN
             case "ON" | "MENU" | "IDLE" | "ACTIVE" | "READY":
                 return media_player.States.ON
-            case "OFF" | "POWER_OFF" | "POWERED_OFF":
+            case "OFF" | "POWER_OFF" | "POWERED_OFF" | "STOPPED":
                 return media_player.States.OFF
-            case "PLAYING" | "PLAY":
+            case "PLAYING" | "PLAY" | "SEEKING":
                 return media_player.States.PLAYING
             case "PAUSED" | "PAUSE":
                 return media_player.States.PAUSED
@@ -706,7 +717,7 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         entity_ids = []
 
         # Iterate through all available entities
-        for entity in self.api.available_entities:
+        for entity in self.api.available_entities.get_all():
             # Use device_from_entity_id to extract the device from each entity
             entity_device_id = self.device_from_entity_id(entity.id)
             if entity_device_id == device_id:
