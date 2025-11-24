@@ -25,8 +25,8 @@ class DeviceConfigForTests:
 class DeviceForTests(BaseDeviceInterface):
     """Test device implementation."""
 
-    def __init__(self, device_config, loop=None):
-        super().__init__(device_config, loop)
+    def __init__(self, device_config, loop=None, config_manager=None):
+        super().__init__(device_config, loop, config_manager)
         self.connected = False
 
     @property

@@ -11,15 +11,20 @@ Provides base classes for different device connection patterns:
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from abc import ABC, abstractmethod
 from asyncio import AbstractEventLoop
 from enum import IntEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
 from pyee.asyncio import AsyncIOEventEmitter
+
+if TYPE_CHECKING:
+    from .config import BaseDeviceManager
 
 _LOG = logging.getLogger(__name__)
 
@@ -49,22 +54,76 @@ class BaseDeviceInterface(ABC):
     - Logging helpers
     """
 
-    def __init__(self, device_config: Any, loop: AbstractEventLoop | None = None):
+    def __init__(
+        self,
+        device_config: Any,
+        loop: AbstractEventLoop | None = None,
+        config_manager: BaseDeviceManager | None = None,
+    ):
         """
         Create device interface instance.
 
         :param device_config: Device configuration
         :param loop: Event loop
+        :param config_manager: Optional config manager for persisting configuration updates
         """
         self._loop: AbstractEventLoop = loop or asyncio.get_running_loop()
         self.events = AsyncIOEventEmitter(self._loop)
         self._device_config = device_config
+        self._config_manager: BaseDeviceManager | None = config_manager
         self._state: Any = None
 
     @property
     def device_config(self) -> Any:
         """Return the device configuration."""
         return self._device_config
+
+    def update_config(self, **kwargs) -> bool:
+        """
+        Update device configuration attributes and persist changes.
+
+        This method allows devices to update their configuration when runtime
+        changes occur, such as:
+        - New authentication tokens received
+        - IP address changes detected
+        - Device firmware updates changing capabilities
+        - Dynamic configuration from device responses
+
+        The configuration is updated both in memory and persisted to storage
+        if a config_manager is available.
+
+        Example usage:
+            # Update token after authentication
+            self.update_config(token="new_token_value")
+
+            # Update multiple fields
+            self.update_config(
+                address="192.168.1.100",
+                token="new_token",
+                firmware_version="2.0.1"
+            )
+
+        :param kwargs: Configuration attributes to update
+        :return: True if config was persisted successfully, False if no config_manager or update failed
+        :raises AttributeError: If trying to update non-existent configuration attribute
+        """
+        # Update the in-memory configuration
+        for key, value in kwargs.items():
+            if not hasattr(self._device_config, key):
+                raise AttributeError(
+                    f"Configuration attribute '{key}' does not exist on {type(self._device_config).__name__}"
+                )
+            setattr(self._device_config, key, value)
+
+        # Persist changes if config manager is available
+        if self._config_manager is not None:
+            return self._config_manager.update(self._device_config)
+
+        _LOG.debug(
+            "[%s] Config updated in memory only (no config_manager available)",
+            self.log_id,
+        )
+        return False
 
     @property
     @abstractmethod
@@ -110,9 +169,14 @@ class StatelessHTTPDevice(BaseDeviceInterface):
     Good for: REST APIs, simple HTTP devices without a persistent connection (e.g., websockets)
     """
 
-    def __init__(self, device_config: Any, loop: AbstractEventLoop | None = None):
+    def __init__(
+        self,
+        device_config: Any,
+        loop: AbstractEventLoop | None = None,
+        config_manager: BaseDeviceManager | None = None,
+    ):
         """Initialize stateless HTTP device."""
-        super().__init__(device_config, loop)
+        super().__init__(device_config, loop, config_manager)
         self._is_connected = False
         self._session_timeout = aiohttp.ClientTimeout(total=10)
 
@@ -182,6 +246,7 @@ class PollingDevice(BaseDeviceInterface):
         device_config: Any,
         loop: AbstractEventLoop | None = None,
         poll_interval: int = 30,
+        config_manager: BaseDeviceManager | None = None,
     ):
         """
         Initialize polling device.
@@ -189,8 +254,9 @@ class PollingDevice(BaseDeviceInterface):
         :param device_config: Device configuration
         :param loop: Event loop
         :param poll_interval: Polling interval in seconds
+        :param config_manager: Optional config manager for persisting configuration updates
         """
-        super().__init__(device_config, loop)
+        super().__init__(device_config, loop, config_manager)
         self._poll_interval = poll_interval
         self._poll_task: asyncio.Task | None = None
         self._stop_polling = asyncio.Event()
@@ -296,6 +362,7 @@ class WebSocketDevice(BaseDeviceInterface):
         reconnect_max: int = BACKOFF_MAX,
         ping_interval: int = 30,
         ping_timeout: int = 10,
+        config_manager: BaseDeviceManager | None = None,
     ):
         """
         Initialize WebSocket device.
@@ -307,8 +374,9 @@ class WebSocketDevice(BaseDeviceInterface):
         :param reconnect_max: Maximum reconnection interval in seconds (default: 30)
         :param ping_interval: Ping/keepalive interval in seconds, 0 to disable (default: 30)
         :param ping_timeout: Ping timeout in seconds (default: 10)
+        :param config_manager: Optional config manager for persisting configuration updates
         """
-        super().__init__(device_config, loop)
+        super().__init__(device_config, loop, config_manager)
         self._ws: Any = None
         self._ws_task: asyncio.Task | None = None
         self._ping_task: asyncio.Task | None = None
@@ -656,6 +724,7 @@ class WebSocketPollingDevice(WebSocketDevice, PollingDevice):
         ping_interval: int = 30,
         ping_timeout: int = 10,
         keep_polling_on_disconnect: bool = True,
+        config_manager: BaseDeviceManager | None = None,
     ):
         """
         Initialize WebSocket + Polling device.
@@ -666,6 +735,7 @@ class WebSocketPollingDevice(WebSocketDevice, PollingDevice):
         :param ping_interval: WebSocket ping interval in seconds, 0 to disable (default: 30)
         :param ping_timeout: WebSocket ping timeout in seconds (default: 10)
         :param keep_polling_on_disconnect: Continue polling when WebSocket disconnects (default: True)
+        :param config_manager: Optional config manager for persisting configuration updates
         """
         # Initialize both parent classes
         # Disable auto-reconnect for WebSocket since polling provides resilience
@@ -677,8 +747,11 @@ class WebSocketPollingDevice(WebSocketDevice, PollingDevice):
             reconnect=False,  # Disabled - we handle reconnection in connect()
             ping_interval=ping_interval,
             ping_timeout=ping_timeout,
+            config_manager=config_manager,
         )
-        PollingDevice.__init__(self, device_config, loop, poll_interval)
+        PollingDevice.__init__(
+            self, device_config, loop, poll_interval, config_manager
+        )
         self._keep_polling_on_disconnect = keep_polling_on_disconnect
 
     async def connect(self) -> None:
@@ -833,6 +906,7 @@ class PersistentConnectionDevice(BaseDeviceInterface):
         device_config: Any,
         loop: AbstractEventLoop | None = None,
         backoff_max: int = BACKOFF_MAX,
+        config_manager: BaseDeviceManager | None = None,
     ):
         """
         Initialize persistent connection device.
@@ -840,8 +914,9 @@ class PersistentConnectionDevice(BaseDeviceInterface):
         :param device_config: Device configuration
         :param loop: Event loop
         :param backoff_max: Maximum backoff time in seconds
+        :param config_manager: Optional config manager for persisting configuration updates
         """
-        super().__init__(device_config, loop)
+        super().__init__(device_config, loop, config_manager)
         self._connection: Any = None
         self._reconnect_task: asyncio.Task | None = None
         self._stop_reconnect = asyncio.Event()

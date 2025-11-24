@@ -295,7 +295,9 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
                 device_id,
                 self.get_device_name(device_config),
             )
-            device = self._device_class(device_config, loop=self._loop)
+            device = self._device_class(
+                device_config, loop=self._loop, config_manager=self.config
+            )
             self.setup_device_event_handlers(device)
             self._configured_devices[device_id] = device
 
