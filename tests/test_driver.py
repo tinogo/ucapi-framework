@@ -119,6 +119,9 @@ class MockEntityCollection:
     def contains(self, entity_id):
         return any(e.id == entity_id for e in self._entities)
 
+    def get_all(self):
+        return self._entities
+
     def clear(self):
         self._entities.clear()
 
