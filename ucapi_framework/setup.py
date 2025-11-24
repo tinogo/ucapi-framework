@@ -526,7 +526,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         Internal handler for additional configuration screens.
 
         Calls the overridable handle_additional_configuration_response and
-        finalizes setup if it returns None.
+        finalizes setup based on what it returns.
 
         :param msg: User data response
         :return: Setup action
@@ -535,11 +535,22 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             # Call the overridable method
             result = await self.handle_additional_configuration_response(msg)
 
-            # If it returns a screen, show it
-            if result is not None:
+            # If it returns a RequestUserInput, show it
+            if isinstance(result, RequestUserInput):
                 return result
 
-            # If it returns None, finalize the setup
+            # If it returns SetupError, cleanup and return it
+            if isinstance(result, SetupError):
+                self._pending_device_config = None
+                return result
+
+            # If it returns a device config (ConfigT), replace pending and save
+            # This allows returning a new/modified device config to complete setup
+            if result is not None and not isinstance(result, SetupComplete):
+                # User returned a device config - use it as the final config
+                self._pending_device_config = result
+
+            # At this point: result is None, SetupComplete, or we just set pending_device_config
             if self._pending_device_config is None:
                 _LOG.error("Pending device config is None during finalization")
                 return SetupError(error_type=IntegrationSetupError.OTHER)
@@ -1145,23 +1156,46 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
 
     async def handle_additional_configuration_response(
         self, msg: UserDataResponse
-    ) -> SetupAction:
+    ) -> ConfigT | SetupAction | None:
         """
         Handle response from additional configuration screens.
 
         Override this method to process responses from custom setup screens
-        created by get_additional_configuration_screen(). You should:
+        created by get_additional_configuration_screen().
 
-        1. Update self._pending_device_config with the user's input
-        2. Either:
-           - Return another RequestUserInput for more screens, or
-           - Return None to trigger device save and SetupComplete
+        Return one of:
+        - **ConfigT** (device config): Complete and save this device config
+        - **RequestUserInput**: Show another configuration screen
+        - **SetupError**: Abort setup with an error
+        - **SetupComplete** or **None**: Save self._pending_device_config and complete
 
-        If you return None, the base class will save self._pending_device_config
-        and complete the setup.
+        **Two patterns for building device config:**
+
+        Pattern 1 - Modify self._pending_device_config and return None:
+            async def handle_additional_configuration_response(self, msg):
+                # Update the pending device config with additional data
+                self._pending_device_config.token = msg.input_values["token"]
+                self._pending_device_config.zone = msg.input_values["zone"]
+                return None  # Save pending config and complete
+
+        Pattern 2 - Return a complete device config:
+            async def handle_additional_configuration_response(self, msg):
+                # Collect all data and create/return final device config
+                token = msg.input_values["token"]
+                zone = msg.input_values["zone"]
+                
+                # Create complete device config
+                return MyDeviceConfig(
+                    identifier=self._pending_device_config.identifier,
+                    name=self._pending_device_config.name,
+                    address=self._pending_device_config.address,
+                    token=token,
+                    zone=zone
+                )
+                # This config will be saved and setup will complete
 
         :param msg: User data response from additional screen
-        :return: SetupAction (RequestUserInput for another screen, SetupComplete, or SetupError)
+        :return: Device config to save, SetupAction, or None to complete
         """
         _ = msg  # Mark as intentionally unused
         # Default: No additional handling, save device and complete

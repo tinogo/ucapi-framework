@@ -83,6 +83,7 @@ class ConcreteWebSocketDevice(WebSocketDevice):
         super().__init__(*args, **kwargs)
         self.messages_received = []
         self.ws_closed = False
+        self.ping_count = 0
 
     @property
     def identifier(self) -> str:
@@ -122,6 +123,10 @@ class ConcreteWebSocketDevice(WebSocketDevice):
         """Handle incoming message."""
         self.messages_received.append(message)
         self.events.emit(DeviceEvents.UPDATE, self.identifier, message)
+
+    async def send_ping(self) -> None:
+        """Send ping to WebSocket."""
+        self.ping_count += 1
 
 
 class ConcretePersistentConnectionDevice(PersistentConnectionDevice):
@@ -199,6 +204,207 @@ class TestBaseDeviceInterface:
         assert device.device_config == mock_device_config
         assert device.events is not None
         assert device.state is None
+
+    def test_init_with_config_manager(self, mock_device_config, event_loop):
+        """Test device initialization with config manager."""
+
+        class MinimalDevice(BaseDeviceInterface):
+            @property
+            def identifier(self):
+                return "test"
+
+            @property
+            def name(self):
+                return "Test"
+
+            @property
+            def address(self):
+                return "192.168.1.1"
+
+            @property
+            def log_id(self):
+                return "test"
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        mock_config_manager = Mock()
+        device = MinimalDevice(
+            mock_device_config, loop=event_loop, config_manager=mock_config_manager
+        )
+
+        assert device._config_manager == mock_config_manager
+
+    def test_device_config_property(self, mock_device_config, event_loop):
+        """Test device_config property."""
+
+        class MinimalDevice(BaseDeviceInterface):
+            @property
+            def identifier(self):
+                return "test"
+
+            @property
+            def name(self):
+                return "Test"
+
+            @property
+            def address(self):
+                return "192.168.1.1"
+
+            @property
+            def log_id(self):
+                return "test"
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        device = MinimalDevice(mock_device_config, loop=event_loop)
+        assert device.device_config == mock_device_config
+
+    def test_update_config_with_manager(self, mock_device_config, event_loop):
+        """Test updating config with config manager."""
+
+        class MinimalDevice(BaseDeviceInterface):
+            @property
+            def identifier(self):
+                return "test"
+
+            @property
+            def name(self):
+                return "Test"
+
+            @property
+            def address(self):
+                return "192.168.1.1"
+
+            @property
+            def log_id(self):
+                return "test"
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        mock_config_manager = Mock()
+        mock_config_manager.update = Mock(return_value=True)
+        device = MinimalDevice(
+            mock_device_config, loop=event_loop, config_manager=mock_config_manager
+        )
+
+        # Update existing attribute
+        result = device.update_config(identifier="new_id")
+        assert result is True
+        assert mock_device_config.identifier == "new_id"
+        mock_config_manager.update.assert_called_once_with(mock_device_config)
+
+    def test_update_config_without_manager(self, mock_device_config, event_loop):
+        """Test updating config without config manager."""
+
+        class MinimalDevice(BaseDeviceInterface):
+            @property
+            def identifier(self):
+                return "test"
+
+            @property
+            def name(self):
+                return "Test"
+
+            @property
+            def address(self):
+                return "192.168.1.1"
+
+            @property
+            def log_id(self):
+                return "test"
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        device = MinimalDevice(mock_device_config, loop=event_loop)
+
+        # Update existing attribute
+        result = device.update_config(identifier="new_id")
+        assert result is False  # No config manager
+        assert mock_device_config.identifier == "new_id"
+
+    def test_update_config_nonexistent_attribute(self, mock_device_config, event_loop):
+        """Test updating non-existent config attribute raises error."""
+
+        class MinimalDevice(BaseDeviceInterface):
+            @property
+            def identifier(self):
+                return "test"
+
+            @property
+            def name(self):
+                return "Test"
+
+            @property
+            def address(self):
+                return "192.168.1.1"
+
+            @property
+            def log_id(self):
+                return "test"
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        device = MinimalDevice(mock_device_config, loop=event_loop)
+
+        with pytest.raises(AttributeError, match="does not exist"):
+            device.update_config(nonexistent_field="value")
+
+    def test_update_config_multiple_fields(self, mock_device_config, event_loop):
+        """Test updating multiple config fields at once."""
+
+        class MinimalDevice(BaseDeviceInterface):
+            @property
+            def identifier(self):
+                return "test"
+
+            @property
+            def name(self):
+                return "Test"
+
+            @property
+            def address(self):
+                return "192.168.1.1"
+
+            @property
+            def log_id(self):
+                return "test"
+
+            async def connect(self):
+                pass
+
+            async def disconnect(self):
+                pass
+
+        mock_config_manager = Mock()
+        mock_config_manager.update = Mock(return_value=True)
+        device = MinimalDevice(
+            mock_device_config, loop=event_loop, config_manager=mock_config_manager
+        )
+
+        result = device.update_config(identifier="new_id", name="New Name")
+        assert result is True
+        assert mock_device_config.identifier == "new_id"
+        assert mock_device_config.name == "New Name"
 
     def test_state_property(self, mock_device_config, event_loop):
         """Test state property."""
@@ -403,6 +609,56 @@ class TestPollingDevice:
 
         await device.disconnect()
 
+    @pytest.mark.asyncio
+    async def test_connect_error_handling(self, mock_device_config, event_loop):
+        """Test error handling during connection."""
+
+        class FailingPollingDevice(ConcretePollingDevice):
+            async def establish_connection(self):
+                raise ConnectionError("Connection failed")
+
+        device = FailingPollingDevice(
+            mock_device_config, loop=event_loop, poll_interval=0.1
+        )
+
+        error_events = []
+        device.events.on(DeviceEvents.ERROR, lambda *args: error_events.append(args))
+
+        await device.connect()
+        await asyncio.sleep(0.1)
+
+        assert len(error_events) > 0
+        assert "Connection failed" in str(error_events[0])
+
+        await device.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_poll_error_handling(self, mock_device_config, event_loop):
+        """Test error handling during polling."""
+
+        class FailingPollDevice(ConcretePollingDevice):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.poll_attempts = 0
+
+            async def poll_device(self):
+                self.poll_attempts += 1
+                if self.poll_attempts == 1:
+                    raise RuntimeError("Poll failed")
+                # Second poll succeeds
+                await super().poll_device()
+
+        device = FailingPollDevice(
+            mock_device_config, loop=event_loop, poll_interval=0.1
+        )
+
+        await device.connect()
+        await asyncio.sleep(0.25)  # Wait for multiple polls
+        await device.disconnect()
+
+        # Should have attempted multiple times despite error
+        assert device.poll_attempts > 1
+
 
 class TestWebSocketDevice:
     """Tests for WebSocketDevice."""
@@ -483,6 +739,201 @@ class TestWebSocketDevice:
         await device.disconnect()
 
         assert len(updates_received) == 3
+
+    @pytest.mark.asyncio
+    async def test_websocket_reconnection_enabled(self, mock_device_config, event_loop):
+        """Test WebSocket reconnection with automatic reconnect."""
+
+        class ReconnectingWebSocketDevice(ConcreteWebSocketDevice):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.connection_attempts = 0
+
+            async def create_websocket(self):
+                self.connection_attempts += 1
+                if self.connection_attempts == 1:
+                    # First attempt fails
+                    raise ConnectionError("Connection failed")
+                # Second attempt succeeds
+                return await super().create_websocket()
+
+        device = ReconnectingWebSocketDevice(
+            mock_device_config,
+            loop=event_loop,
+            reconnect=True,
+            reconnect_interval=0.1,
+        )
+
+        await device.connect()
+        await asyncio.sleep(0.3)  # Wait for reconnection
+
+        # Should have tried at least twice
+        assert device.connection_attempts >= 2
+
+        await device.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_websocket_connection_error_no_reconnect(
+        self, mock_device_config, event_loop
+    ):
+        """Test WebSocket connection error without reconnection."""
+
+        class FailingWebSocketDevice(ConcreteWebSocketDevice):
+            async def create_websocket(self):
+                raise ConnectionError("Connection failed")
+
+        device = FailingWebSocketDevice(
+            mock_device_config, loop=event_loop, reconnect=False
+        )
+
+        error_events = []
+        device.events.on(DeviceEvents.ERROR, lambda *args: error_events.append(args))
+
+        await device.connect()
+        await asyncio.sleep(0.1)
+
+        assert len(error_events) > 0
+        assert "Connection failed" in str(error_events[0])
+
+        await device.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_websocket_ping_enabled(self, mock_device_config, event_loop):
+        """Test WebSocket ping functionality."""
+
+        class LongRunningWebSocketDevice(ConcreteWebSocketDevice):
+            """Device that keeps connection alive longer."""
+
+            async def receive_message(self):
+                await asyncio.sleep(0.05)
+                # Keep returning messages to stay in loop
+                if len(self.messages_received) < 10:
+                    return {"type": "update", "count": len(self.messages_received) + 1}
+                return None
+
+        device = LongRunningWebSocketDevice(
+            mock_device_config,
+            loop=event_loop,
+            reconnect=False,
+            ping_interval=0.05,
+            ping_timeout=5,
+        )
+
+        await device.connect()
+        await asyncio.sleep(0.25)  # Wait for pings
+
+        # Verify ping was called
+        assert device.ping_count >= 1
+
+        await device.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_websocket_multiple_connect_ignored(
+        self, mock_device_config, event_loop
+    ):
+        """Test that multiple connect calls are ignored when already connecting."""
+        device = ConcreteWebSocketDevice(
+            mock_device_config, loop=event_loop, reconnect=False
+        )
+
+        await device.connect()
+        first_task = device._ws_task
+
+        # Try to connect again while already connected
+        await device.connect()
+        second_task = device._ws_task
+
+        # Should be the same task
+        assert first_task == second_task
+
+        await device.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_websocket_message_loop_error(self, mock_device_config, event_loop):
+        """Test error handling in message loop."""
+
+        class ErrorMessageDevice(ConcreteWebSocketDevice):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.message_count = 0
+
+            async def handle_message(self, message):
+                self.message_count += 1
+                if self.message_count == 1:
+                    raise RuntimeError("Message handling error")
+                await super().handle_message(message)
+
+        device = ErrorMessageDevice(
+            mock_device_config, loop=event_loop, reconnect=False
+        )
+
+        error_logged = []
+
+        # Mock the logger to verify error was logged
+        with patch("ucapi_framework.device._LOG") as mock_log:
+            mock_log.error = Mock(side_effect=lambda *args: error_logged.append(args))
+
+            await device.connect()
+            await asyncio.sleep(0.2)
+            await device.disconnect()
+
+        # Should have logged at least one error
+        assert len(error_logged) > 0
+        # Should have received at least the first message that caused error
+        assert device.message_count >= 1
+
+    @pytest.mark.asyncio
+    async def test_websocket_close_error_handling(self, mock_device_config, event_loop):
+        """Test error handling when closing websocket."""
+
+        class CloseErrorDevice(ConcreteWebSocketDevice):
+            async def close_websocket(self):
+                raise RuntimeError("Close error")
+
+        device = CloseErrorDevice(mock_device_config, loop=event_loop, reconnect=False)
+
+        await device.connect()
+        await asyncio.sleep(0.05)
+        # Should not raise exception
+        await device.disconnect()
+
+    @pytest.mark.asyncio
+    async def test_websocket_is_connected_property(
+        self, mock_device_config, event_loop
+    ):
+        """Test is_connected property."""
+
+        class LongRunningWebSocketDevice(ConcreteWebSocketDevice):
+            """Device that keeps connection alive longer."""
+
+            async def receive_message(self):
+                await asyncio.sleep(0.05)
+                # Keep returning messages to stay connected
+                if len(self.messages_received) < 10:
+                    return {"type": "update", "count": len(self.messages_received) + 1}
+                return None
+
+        device = LongRunningWebSocketDevice(
+            mock_device_config, loop=event_loop, reconnect=False
+        )
+
+        assert device.is_connected is False
+
+        # Track connected events
+        connected_events = []
+        device.events.on(
+            DeviceEvents.CONNECTED, lambda *args: connected_events.append(args)
+        )
+
+        await device.connect()
+        await asyncio.sleep(0.1)  # Wait for connection to establish
+
+        # Verify we got connected event
+        assert len(connected_events) > 0
+        assert device.is_connected is True
+
+        await device.disconnect()
+        assert device.is_connected is False
 
 
 class TestPersistentConnectionDevice:
@@ -573,6 +1024,51 @@ class TestPersistentConnectionDevice:
         await device.disconnect()
 
         assert len(error_events) >= 1
+
+    @pytest.mark.asyncio
+    async def test_backoff_increases_on_errors(self, mock_device_config, event_loop):
+        """Test that backoff increases exponentially on connection errors."""
+
+        class FailingDevice(ConcretePersistentConnectionDevice):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.attempt_count = 0
+
+            async def establish_connection(self):
+                self.attempt_count += 1
+                raise ConnectionError("Connection failed")
+
+        from ucapi_framework.device import BACKOFF_SEC
+
+        device = FailingDevice(mock_device_config, loop=event_loop, backoff_max=1)
+
+        await device.connect()
+        # Wait for initial attempt + backoff + second attempt
+        await asyncio.sleep(BACKOFF_SEC + 0.5)
+        await device.disconnect()
+
+        # Should have made at least 2 attempts
+        assert device.attempt_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_disconnect_stops_reconnection(self, mock_device_config, event_loop):
+        """Test that disconnect stops reconnection attempts."""
+
+        class QuickFailDevice(ConcretePersistentConnectionDevice):
+            async def maintain_connection(self):
+                await asyncio.sleep(0.05)
+                raise ConnectionError("Lost connection")
+
+        device = QuickFailDevice(mock_device_config, loop=event_loop)
+
+        await device.connect()
+        await asyncio.sleep(0.1)
+
+        # Disconnect should stop reconnection
+        await device.disconnect()
+
+        assert device._stop_reconnect.is_set()
+        assert device._reconnect_task is None
 
 
 class ConcreteWebSocketPollingDevice:

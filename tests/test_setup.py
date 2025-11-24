@@ -1384,3 +1384,138 @@ class TestSetupFlowReturnTypes:
 
         assert isinstance(result, SetupComplete)
         assert config_manager.contains("dev1")
+
+
+class TestAdditionalConfigurationReturnTypes:
+    """Test different return types from handle_additional_configuration_response."""
+
+    @pytest.mark.asyncio
+    async def test_additional_config_returns_device_config(self, config_manager):
+        """Test returning a complete device config from additional configuration."""
+
+        class FlowWithAdditionalConfigReturningDevice(BaseSetupFlow):
+            """Flow that returns a device config from additional configuration."""
+
+            def __init__(self, config, **kwargs):
+                super().__init__(config, **kwargs)
+                self.config_returned = False
+
+            async def create_device_from_manual_entry(self, input_values):
+                # Create initial partial device
+                return DeviceConfigForTests(
+                    identifier=input_values["id"],
+                    name="Partial Device",
+                    address="192.168.1.100",
+                    port=8080,
+                )
+
+            async def get_additional_configuration_screen(
+                self, device_config, previous_input
+            ):
+                # Show additional screen to collect more data
+                return RequestUserInput(
+                    {"en": "Additional Config"},
+                    [
+                        {"id": "token", "field": {"text": {"value": ""}}},
+                        {"id": "zone", "field": {"number": {"value": 1}}},
+                    ],
+                )
+
+            async def handle_additional_configuration_response(self, msg):
+                # Return a complete device config (Pattern 2 from docstring)
+                token = msg.input_values["token"]
+                zone = msg.input_values["zone"]
+
+                # Create and return complete device config
+                self.config_returned = True
+                return DeviceConfigForTests(
+                    identifier=self._pending_device_config.identifier,
+                    name=f"Device Zone {zone}",
+                    address=self._pending_device_config.address,
+                    port=int(token),  # Use token as port for testing
+                )
+
+            def get_manual_entry_form(self):
+                return RequestUserInput(
+                    {"en": "Manual"}, [{"id": "id", "field": {"text": {"value": ""}}}]
+                )
+
+        setup_flow = FlowWithAdditionalConfigReturningDevice(config_manager)
+        setup_flow._setup_step = SetupSteps.MANUAL_ENTRY
+
+        # Simulate manual entry
+        msg1 = UserDataResponse(input_values={"id": "test-device"})
+        result1 = await setup_flow._handle_manual_entry_response(msg1)
+
+        # Should get additional config screen
+        assert isinstance(result1, RequestUserInput)
+        assert result1.title == {"en": "Additional Config"}
+
+        # Simulate additional config response with device config return
+        msg2 = UserDataResponse(input_values={"token": "9090", "zone": "3"})
+        result2 = await setup_flow._handle_additional_configuration_response(msg2)
+
+        # Should complete setup
+        assert isinstance(result2, SetupComplete)
+        assert setup_flow.config_returned is True
+
+        # Verify device was saved with the returned config
+        assert config_manager.contains("test-device")
+        device = config_manager.get("test-device")
+        assert device.name == "Device Zone 3"
+        assert device.port == 9090  # Token used as port
+
+    @pytest.mark.asyncio
+    async def test_additional_config_modifies_pending_returns_none(self, config_manager):
+        """Test modifying pending config and returning None (Pattern 1)."""
+
+        class FlowWithAdditionalConfigModifyingPending(BaseSetupFlow):
+            """Flow that modifies pending config and returns None."""
+
+            async def create_device_from_manual_entry(self, input_values):
+                return DeviceConfigForTests(
+                    identifier=input_values["id"],
+                    name="Initial Name",
+                    address="192.168.1.100",
+                    port=8080,
+                )
+
+            async def get_additional_configuration_screen(
+                self, device_config, previous_input
+            ):
+                return RequestUserInput(
+                    {"en": "Additional Config"},
+                    [{"id": "new_port", "field": {"number": {"value": 9000}}}],
+                )
+
+            async def handle_additional_configuration_response(self, msg):
+                # Modify pending config and return None (Pattern 1 from docstring)
+                self._pending_device_config.port = msg.input_values["new_port"]
+                return None
+
+            def get_manual_entry_form(self):
+                return RequestUserInput(
+                    {"en": "Manual"}, [{"id": "id", "field": {"text": {"value": ""}}}]
+                )
+
+        setup_flow = FlowWithAdditionalConfigModifyingPending(config_manager)
+        setup_flow._setup_step = SetupSteps.MANUAL_ENTRY
+
+        # Simulate manual entry
+        msg1 = UserDataResponse(input_values={"id": "test-device-2"})
+        result1 = await setup_flow._handle_manual_entry_response(msg1)
+
+        # Should get additional config screen
+        assert isinstance(result1, RequestUserInput)
+
+        # Simulate additional config response with None return
+        msg2 = UserDataResponse(input_values={"new_port": 7070})
+        result2 = await setup_flow._handle_additional_configuration_response(msg2)
+
+        # Should complete setup
+        assert isinstance(result2, SetupComplete)
+
+        # Verify device was saved with modified pending config
+        assert config_manager.contains("test-device-2")
+        device = config_manager.get("test-device-2")
+        assert device.port == 7070
