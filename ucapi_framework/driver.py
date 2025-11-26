@@ -66,7 +66,7 @@ def _get_first_valid_attr(obj: Any, *attrs: str) -> str | None:
 
 
 def create_entity_id(
-    device_id: str, entity_type: EntityTypes | str, entity_id: str | None = None
+    entity_type: EntityTypes | str, device_id: str, entity_id: str | None = None
 ) -> str:
     """
     Create a unique entity identifier for the given device and entity type.
@@ -1496,13 +1496,22 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         """
         Handle a newly added device in the configuration.
 
-        Default implementation: Adds the device without connecting.
+        Default implementation:
+        - If require_connection_before_registry=True: schedules async_add_configured_device
+          as a background task (connects and registers entities after connection)
+        - Otherwise: adds the device without connecting
+
         Override if you need custom behavior.
 
         :param device_config: Device configuration that was added
         """
         _LOG.debug("Device added: %s", self.get_device_id(device_config))
-        self.add_configured_device(device_config, connect=False)
+
+        if self._require_connection_before_registry:
+            # Schedule async device addition as a background task
+            self._loop.create_task(self.async_add_configured_device(device_config))
+        else:
+            self.add_configured_device(device_config, connect=False)
 
     def on_device_removed(self, device_config: ConfigT | None) -> None:
         """
