@@ -27,6 +27,8 @@ from .device import (
     PollingDevice,
     WebSocketDevice,
     WebSocketPollingDevice,
+    ExternalClientDevice,
+    DeviceEvents,
 )
 from .discovery import BaseDiscovery, DiscoveredDevice
 
@@ -43,6 +45,8 @@ __all__ = [
     "BaseDiscovery",
     "DiscoveredDevice",
     "create_entity_id",
+    "ExternalClientDevice",
+    "DeviceEvents",
 ]
 
 __version__ = "0.1.0"
