@@ -1,6 +1,6 @@
 [project]
 name = "ucapi-framework"
-version = "0.1.16"
+version = "0.1.17"
 description = "ucapi framework that provides core functionality for building integrations."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -8,7 +8,6 @@ dependencies = [
     "pyee>=13.0.0",
     "ucapi>=0.3.2",
     "aiohttp>=3.9.0",
-    "mkdocs-material>=9.7.0",
 ]
 
 [dependency-groups]

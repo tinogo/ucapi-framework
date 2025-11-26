@@ -221,13 +221,19 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         """
         Handle entity subscription events.
 
-        Default implementation:
-        1. Ensures device connection if require_connection_before_entities is True
-        2. Adds devices for subscribed entities
-        3. Calls refresh_entity_state() for each entity to update their state
+        Default implementation handles two scenarios:
 
-        Override to customize subscription behavior, or override refresh_entity_state()
-        to customize how individual entity states are refreshed.
+        **Standard integrations** (require_connection_before_registry=False):
+        - Adds devices for subscribed entities (with background connect)
+        - Calls refresh_entity_state() for each entity
+
+        **Hub-based integrations** (require_connection_before_registry=True):
+        - If device not configured: adds device, connects, then calls async_register_available_entities()
+        - If device configured but not connected: connects with retries, then calls async_register_available_entities()
+        - Calls refresh_entity_state() for each entity
+
+        Override refresh_entity_state() for custom state refresh logic.
+        Override async_register_available_entities() for hub-based entity population.
 
         :param entity_ids: List of entity identifiers being subscribed
         """
@@ -236,10 +242,31 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         if not entity_ids:
             return
 
-        # Ensure connection if configured
+        device_id = self.device_from_entity_id(entity_ids[0])
+        if device_id is None:
+            _LOG.error("Could not extract device_id from entity_id: %s", entity_ids[0])
+            return
+
+        # Path 1: Hub-based integrations that need connection before entity registration
         if self._require_connection_before_registry:
-            device_id = self.device_from_entity_id(entity_ids[0])
-            if device_id:
+            # Check if device is already configured
+            if device_id not in self._configured_devices:
+                # Device not configured - add it and connect
+                device_config = self.get_device_config(device_id)
+                if device_config:
+                    # Add device without registering entities yet (connect=False, register=False)
+                    self._add_device_instance(device_config)
+                else:
+                    _LOG.error(
+                        "Failed to subscribe entity: no device config found for %s",
+                        device_id,
+                    )
+                    return
+
+            # Get the device and ensure it's connected
+            device = self._configured_devices.get(device_id)
+            if device and not device.is_connected:
+                # Connect with retries
                 if not await self._ensure_device_connected(device_id):
                     _LOG.error(
                         "Failed to connect to device %s for entity subscription",
@@ -247,34 +274,31 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
                     )
                     return
 
-                # Re-register available entities after connection
-                # This allows hub-based integrations to populate entities dynamically from the hub
-                device = self._configured_devices.get(device_id)
-                device_config = self.get_device_config(device_id)
-                if device and device_config:
-                    self.register_available_entities(device_config, device)
-
-        # Add devices for entities that aren't configured yet
-        for entity_id in entity_ids:
-            device_id = self.device_from_entity_id(entity_id)
-            if device_id is None:
-                continue
-
-            # Check if device is already configured
-            if device_id in self._configured_devices:
-                continue
-
-            # Device not configured yet, add it
-            device_config = self.get_device_config(device_id)
-            if device_config:
-                # Add without connecting if require_connection_before_registry is True
-                # (connection already established above)
-                connect = not self._require_connection_before_registry
-                self.add_configured_device(device_config, connect=connect)
-            else:
-                _LOG.error(
-                    "Failed to subscribe entity %s: no device config found", entity_id
+                # After successful connection, register entities from the hub (async)
+                await self.async_register_available_entities(
+                    self.get_device_config(device_id), device
                 )
+
+        # Path 2: Standard integrations - add devices for entities that aren't configured yet
+        else:
+            for entity_id in entity_ids:
+                eid_device_id = self.device_from_entity_id(entity_id)
+                if eid_device_id is None:
+                    continue
+
+                # Check if device is already configured
+                if eid_device_id in self._configured_devices:
+                    continue
+
+                # Device not configured yet, add it with background connect
+                device_config = self.get_device_config(eid_device_id)
+                if device_config:
+                    self.add_configured_device(device_config, connect=True)
+                else:
+                    _LOG.error(
+                        "Failed to subscribe entity %s: no device config found",
+                        entity_id,
+                    )
 
         # Refresh each entity's state
         for entity_id in entity_ids:
@@ -323,8 +347,8 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         """
         Ensure device is connected, with retry logic.
 
-        This helper method is used when require_connection_before_registry is True.
-        It attempts to connect to the device with up to 3 retries.
+        This helper method attempts to connect to the device with up to 3 retries.
+        The device must already exist in _configured_devices.
 
         :param device_id: Device identifier
         :return: True if device is connected, False otherwise
@@ -332,15 +356,8 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         device = self._configured_devices.get(device_id)
 
         if not device:
-            # Try to get from config and add it
-            device_config = self.get_device_config(device_id)
-            if device_config:
-                _LOG.debug("Adding device %s from config", device_id)
-                self.add_configured_device(device_config, connect=False)
-                device = self._configured_devices.get(device_id)
-            else:
-                _LOG.error("Device %s not found in configuration", device_id)
-                return False
+            _LOG.error("Device %s not found in configured devices", device_id)
+            return False
 
         # Check if already connected
         if device.is_connected:
@@ -479,35 +496,56 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         self, device_config: ConfigT, connect: bool = True
     ) -> None:
         """
-        Add and configure a device.
+        Add and configure a device (non-blocking).
+
+        This method adds a device to the configured devices list and registers
+        its available entities. If connect=True, it will start a background
+        connection task (non-blocking).
+
+        Use this for normal device addition where you don't need to wait for
+        connection to complete. For hub-based integrations that need to wait
+        for connection before registering entities, use async_add_configured_device().
 
         :param device_config: Device configuration
-        :param connect: Whether to initiate connection immediately
+        :param connect: Whether to initiate connection immediately (as background task)
         """
-        device_id = self.get_device_id(device_config)
-
-        if device_id in self._configured_devices:
-            _LOG.debug(
-                "Device %s already configured, updating existing instance", device_id
-            )
-            device = self._configured_devices[device_id]
-        else:
-            _LOG.info(
-                "Adding new device: %s (%s)",
-                device_id,
-                self.get_device_name(device_config),
-            )
-            device = self._device_class(
-                device_config, loop=self._loop, config_manager=self.config
-            )
-            self.setup_device_event_handlers(device)
-            self._configured_devices[device_id] = device
+        device = self._add_device_instance(device_config)
 
         if connect:
-            # start background connection task
+            # start background connection task (non-blocking)
             self._loop.create_task(device.connect())
 
         self.register_available_entities(device_config, device)
+
+    async def async_add_configured_device(self, device_config: ConfigT) -> bool:
+        """
+        Add and configure a device, waiting for connection to complete (async).
+
+        This method is designed for hub-based integrations where you need to:
+        1. Add the device
+        2. Wait for connection to establish
+        3. Register entities (which may be populated from the hub during connection)
+
+        Use this when require_connection_before_registry=True or when you need
+        to ensure the device is connected before proceeding.
+
+        :param device_config: Device configuration
+        :return: True if device was added and connected successfully, False otherwise
+        """
+        device = self._add_device_instance(device_config)
+        device_id = self.get_device_id(device_config)
+
+        # Always connect and wait for completion
+        _LOG.debug("Connecting to device %s", device_id)
+        if not await device.connect():
+            _LOG.error("Failed to connect to device %s", device_id)
+            return False
+
+        # Register entities after successful connection
+        # For hub-based integrations, this allows the device to populate
+        # its entity list during connection
+        await self.async_register_available_entities(device_config, device)
+        return True
 
     def setup_device_event_handlers(self, device: DeviceT) -> None:
         """
@@ -544,6 +582,79 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
             if self.api.available_entities.contains(entity.id):
                 self.api.available_entities.remove(entity.id)
             self.api.available_entities.add(entity)
+
+    async def async_register_available_entities(
+        self, device_config: ConfigT, device: DeviceT
+    ) -> None:
+        """
+        Register available entities for a device (async version).
+
+        **For hub-based integrations** (require_connection_before_registry=True):
+        Override this method to populate entities that are discovered from the hub
+        after connection. This is called after a successful device connection.
+
+        Default implementation:
+        - If require_connection_before_registry=True: logs a warning that you should
+          override this method, then falls back to register_available_entities()
+        - If require_connection_before_registry=False: calls register_available_entities()
+
+        Example for hub-based integration:
+            async def async_register_available_entities(
+                self, device_config: ConfigT, device: DeviceT
+            ) -> None:
+                # Query hub for available devices/entities
+                for light in device.lights:
+                    entity = ucapi.light.Light(
+                        identifier=f"{device.device_id}-light-{light.device_id}",
+                        name=light.name,
+                        features=[...],
+                    )
+                    if not self.api.available_entities.contains(entity.id):
+                        self.api.available_entities.add(entity)
+
+        :param device_config: Device configuration
+        :param device: Device instance
+        """
+        if self._require_connection_before_registry:
+            _LOG.warning(
+                "async_register_available_entities() called but not overridden. "
+                "When using require_connection_before_registry=True, you should "
+                "override this method to register entities discovered from the hub. "
+                "Falling back to synchronous register_available_entities()."
+            )
+
+        self.register_available_entities(device_config, device)
+
+    def _add_device_instance(self, device_config: ConfigT) -> DeviceT:
+        """
+        Add a device instance without connecting or registering entities.
+
+        This is a low-level helper used by hub-based integrations that need
+        to add a device, connect, and then register entities in sequence.
+
+        :param device_config: Device configuration
+        :return: The created device instance
+        """
+        device_id = self.get_device_id(device_config)
+
+        if device_id in self._configured_devices:
+            _LOG.debug(
+                "Device %s already exists, returning existing instance", device_id
+            )
+            return self._configured_devices[device_id]
+
+        _LOG.info(
+            "Adding device instance: %s (%s)",
+            device_id,
+            self.get_device_name(device_config),
+        )
+        device = self._device_class(
+            device_config, loop=self._loop, config_manager=self.config
+        )
+        self.setup_device_event_handlers(device)
+        self._configured_devices[device_id] = device
+
+        return device
 
     # ========================================================================
     # Device Event Handlers (can be overridden)
