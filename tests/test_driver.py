@@ -89,6 +89,15 @@ class ConcreteDriver(BaseIntegrationDriver[DeviceForTests, DeviceConfigForTests]
         )
         return [entity]
 
+    def entity_type_from_entity_id(self, entity_id: str) -> str | None:
+        """
+        Extract entity type from entity ID.
+
+        Overridden because create_entities is overridden.
+        Since we use the standard format (entity_type.device_id), we delegate to the parent.
+        """
+        return super().entity_type_from_entity_id(entity_id)
+
     def device_from_entity_id(self, entity_id: str) -> str | None:
         """
         Extract device ID from entity ID.
@@ -97,6 +106,15 @@ class ConcreteDriver(BaseIntegrationDriver[DeviceForTests, DeviceConfigForTests]
         Since we use the standard format (entity_type.device_id), we delegate to the parent.
         """
         return super().device_from_entity_id(entity_id)
+
+    def entity_from_entity_id(self, entity_id: str) -> str | None:
+        """
+        Extract sub-entity ID from entity ID.
+
+        Overridden because create_entities is overridden.
+        Since we use the standard format (no sub-entities in this test), we delegate to the parent.
+        """
+        return super().entity_from_entity_id(entity_id)
 
 
 @pytest.fixture
@@ -398,8 +416,10 @@ class TestBaseIntegrationDriver:
         config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
         driver.add_configured_device(config, connect=False)
 
-        # Mock entity
-        driver.api.configured_entities.get.return_value = Mock()
+        # Mock entity with entity_type
+        mock_entity = Mock()
+        mock_entity.entity_type = EntityTypes.MEDIA_PLAYER
+        driver.api.configured_entities.get.return_value = mock_entity
 
         device = driver._configured_devices["dev1"]
         device._state = "on"
@@ -419,8 +439,10 @@ class TestBaseIntegrationDriver:
         config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
         driver.add_configured_device(config, connect=False)
 
-        # Mock entity
-        driver.api.configured_entities.get.return_value = Mock()
+        # Mock entity with entity_type
+        mock_entity = Mock()
+        mock_entity.entity_type = EntityTypes.MEDIA_PLAYER
+        driver.api.configured_entities.get.return_value = mock_entity
 
         await driver.on_device_disconnected("dev1")
 
@@ -433,8 +455,10 @@ class TestBaseIntegrationDriver:
         config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
         driver.add_configured_device(config, connect=False)
 
-        # Mock entity
-        driver.api.configured_entities.get.return_value = Mock()
+        # Mock entity with entity_type
+        mock_entity = Mock()
+        mock_entity.entity_type = EntityTypes.MEDIA_PLAYER
+        driver.api.configured_entities.get.return_value = mock_entity
 
         await driver.on_device_connection_error("dev1", "Connection timeout")
 
@@ -534,11 +558,67 @@ class TestBaseIntegrationDriver:
 
         assert len(driver._configured_devices) == 0
 
+    def test_entity_type_from_entity_id(self, driver):
+        """Test extracting entity type from entity ID."""
+        entity_type = driver.entity_type_from_entity_id("media_player.dev1")
+
+        assert entity_type == "media_player"
+
+    def test_entity_type_from_entity_id_with_sub_entity(self, driver):
+        """Test extracting entity type from entity ID with sub-entity."""
+        entity_type = driver.entity_type_from_entity_id("light.hub_1.bedroom")
+
+        assert entity_type == "light"
+
+    def test_entity_type_from_entity_id_invalid(self, driver):
+        """Test entity_type_from_entity_id with invalid entity ID."""
+        entity_type = driver.entity_type_from_entity_id("invalid")
+
+        assert entity_type is None
+
+    def test_entity_type_from_entity_id_none(self, driver):
+        """Test entity_type_from_entity_id with None."""
+        entity_type = driver.entity_type_from_entity_id(None)
+
+        assert entity_type is None
+
     def test_device_from_entity_id(self, driver):
         """Test extracting device ID from entity ID."""
         device_id = driver.device_from_entity_id("media_player.dev1")
 
         assert device_id == "dev1"
+
+    def test_entity_from_entity_id_simple_format(self, driver):
+        """Test entity_from_entity_id with simple 2-part format returns None."""
+        entity = driver.entity_from_entity_id("media_player.dev1")
+
+        assert entity is None
+
+    def test_entity_from_entity_id_with_sub_entity(self, driver):
+        """Test extracting sub-entity from 3-part entity ID."""
+        entity = driver.entity_from_entity_id("light.hub_1.bedroom")
+
+        assert entity == "bedroom"
+
+    def test_entity_from_entity_id_with_multiple_parts(self, driver):
+        """Test entity_from_entity_id with more than 3 parts returns everything after second period."""
+        entity = driver.entity_from_entity_id("switch.bridge.zone.outlet_1")
+
+        # Returns everything after second period: "zone.outlet_1"
+        # This supports sub-entities with dots in their IDs
+        assert entity == "zone.outlet_1"
+
+    def test_entity_from_entity_id_invalid(self, driver):
+        """Test entity_from_entity_id with invalid entity ID."""
+        entity = driver.entity_from_entity_id("invalid")
+
+        assert entity is None
+
+    def test_entity_from_entity_id_none(self, driver):
+        """Test entity_from_entity_id with None."""
+        entity = driver.entity_from_entity_id(None)
+
+        assert entity is None
 
     def test_device_from_entity_id_default_implementation(self, mock_loop):
         """Test the default device_from_entity_id implementation."""
@@ -571,6 +651,94 @@ class TestBaseIntegrationDriver:
         assert driver.device_from_entity_id("") is None
         assert driver.device_from_entity_id("invalid") is None
         assert driver.device_from_entity_id("only.one") == "one"
+
+    def test_entity_type_from_entity_id_requires_override_when_create_entities_overridden(
+        self, mock_loop
+    ):
+        """Test that overriding create_entities requires overriding entity_type_from_entity_id."""
+
+        class DriverWithCustomEntities(BaseIntegrationDriver):
+            """Driver that overrides create_entities but not entity_type_from_entity_id."""
+
+            def create_entities(self, device_config, device):
+                # Custom entity creation with non-standard ID format
+                return []
+
+            def device_from_entity_id(self, entity_id):
+                return entity_id  # Custom format
+
+            def get_entity_ids_for_device(self, device_id):
+                return [device_id]  # Custom format
+
+        driver = DriverWithCustomEntities(
+            loop=mock_loop, device_class=DeviceForTests, entity_classes=[]
+        )
+
+        # Should raise NotImplementedError with helpful message
+        with pytest.raises(
+            NotImplementedError,
+            match="create_entities\\(\\) is overridden but entity_type_from_entity_id\\(\\) is not",
+        ):
+            driver.entity_type_from_entity_id("custom_entity_id")
+
+    def test_entity_from_entity_id_requires_override_when_3_part_format_used(
+        self, mock_loop
+    ):
+        """Test that overriding create_entities with 3-part format requires overriding entity_from_entity_id."""
+
+        class DriverWith3PartEntities(BaseIntegrationDriver):
+            """Driver that overrides create_entities with 3-part format but not entity_from_entity_id."""
+
+            def create_entities(self, device_config, device):
+                # Custom entity creation with 3-part format
+                return []
+
+            def entity_type_from_entity_id(self, entity_id):
+                return "light"
+
+            def device_from_entity_id(self, entity_id):
+                return "hub_1"
+
+            def get_entity_ids_for_device(self, device_id):
+                return [f"light.{device_id}.bedroom"]  # 3-part format
+
+        driver = DriverWith3PartEntities(
+            loop=mock_loop, device_class=DeviceForTests, entity_classes=[]
+        )
+
+        # Should raise NotImplementedError when 3-part format is detected
+        with pytest.raises(
+            NotImplementedError,
+            match="create_entities\\(\\) is overridden and uses 3-part entity IDs.*entity_from_entity_id\\(\\) is not",
+        ):
+            driver.entity_from_entity_id("light.hub_1.bedroom")
+
+    def test_entity_from_entity_id_no_error_for_2_part_format(self, mock_loop):
+        """Test that overriding create_entities with 2-part format doesn't require overriding entity_from_entity_id."""
+
+        class DriverWith2PartEntities(BaseIntegrationDriver):
+            """Driver that overrides create_entities with 2-part format."""
+
+            def create_entities(self, device_config, device):
+                # Custom entity creation with 2-part format (no sub-entities)
+                return []
+
+            def entity_type_from_entity_id(self, entity_id):
+                return "media_player"
+
+            def device_from_entity_id(self, entity_id):
+                return entity_id  # Custom format
+
+            def get_entity_ids_for_device(self, device_id):
+                return [f"media_player.{device_id}"]  # 2-part format
+
+        driver = DriverWith2PartEntities(
+            loop=mock_loop, device_class=DeviceForTests, entity_classes=[]
+        )
+
+        # Should NOT raise error for 2-part format
+        result = driver.entity_from_entity_id("media_player.dev1")
+        assert result is None  # 2-part format has no sub-entity
 
     def test_device_from_entity_id_requires_override_when_create_entities_overridden(
         self, mock_loop

@@ -52,6 +52,56 @@ class TestBaseDeviceManager:
         manager = ConcreteDeviceManager(temp_config_dir)
         assert list(manager.all()) == []
 
+    def test_default_deserialize_with_device_class_param(self, temp_config_dir):
+        """Test using default deserialize_device with device_class parameter."""
+
+        class AutoDeviceManager(BaseDeviceManager[DeviceConfig]):
+            """Manager using default deserialization."""
+
+            pass  # No override needed!
+
+        # Pass device_class explicitly
+        manager = AutoDeviceManager(temp_config_dir, device_class=DeviceConfig)
+
+        # Add a device
+        device = DeviceConfig("dev1", "Device 1", "192.168.1.1", 8080)
+        manager.add_or_update(device)
+
+        # Create new manager to test loading
+        manager2 = AutoDeviceManager(temp_config_dir, device_class=DeviceConfig)
+
+        loaded = manager2.get("dev1")
+        assert loaded is not None
+        assert loaded.identifier == "dev1"
+        assert loaded.name == "Device 1"
+        assert loaded.address == "192.168.1.1"
+        assert loaded.port == 8080
+
+    def test_default_deserialize_with_generic_type_inference(self, temp_config_dir):
+        """Test using default deserialize_device with Generic type inference."""
+
+        class AutoDeviceManager(BaseDeviceManager[DeviceConfig]):
+            """Manager using default deserialization with type inference."""
+
+            pass  # No device_class param or override needed!
+
+        # Don't pass device_class - it should be inferred from Generic[DeviceConfig]
+        manager = AutoDeviceManager(temp_config_dir)
+
+        # Add a device
+        device = DeviceConfig("dev1", "Device 1", "192.168.1.1", 8080)
+        manager.add_or_update(device)
+
+        # Create new manager to test loading
+        manager2 = AutoDeviceManager(temp_config_dir)
+
+        loaded = manager2.get("dev1")
+        assert loaded is not None
+        assert loaded.identifier == "dev1"
+        assert loaded.name == "Device 1"
+        assert loaded.address == "192.168.1.1"
+        assert loaded.port == 8080
+
     def test_init_with_handlers(self, temp_config_dir):
         """Test initialization with add/remove handlers."""
         add_called = []
@@ -717,3 +767,240 @@ class TestBaseDeviceManager:
 
         # Should fail with no valid devices
         assert result is False
+
+
+class TestNestedDataclassDeserialization:
+    """Test suite for automatic nested dataclass deserialization."""
+
+    def test_deserialize_device_auto_with_nested_dataclass(self, temp_config_dir):
+        """Test automatic deserialization with nested dataclass."""
+
+        @dataclass
+        class LightInfo:
+            device_id: str
+            name: str
+            brightness: int = 100
+
+        @dataclass
+        class HubConfig:
+            identifier: str
+            name: str
+            light: LightInfo
+
+        class HubManager(BaseDeviceManager[HubConfig]):
+            def deserialize_device(self, data: dict) -> HubConfig | None:
+                return self.deserialize_device_auto(data, HubConfig)
+
+        manager = HubManager(temp_config_dir)
+
+        # Test data with nested dataclass
+        data = {
+            "identifier": "hub1",
+            "name": "My Hub",
+            "light": {"device_id": "light1", "name": "Living Room", "brightness": 80},
+        }
+
+        device = manager.deserialize_device(data)
+
+        assert device is not None
+        assert device.identifier == "hub1"
+        assert device.name == "My Hub"
+        assert isinstance(device.light, LightInfo)
+        assert device.light.device_id == "light1"
+        assert device.light.name == "Living Room"
+        assert device.light.brightness == 80
+
+    def test_deserialize_device_auto_with_list_of_dataclasses(self, temp_config_dir):
+        """Test automatic deserialization with list of dataclasses."""
+
+        @dataclass
+        class LightInfo:
+            device_id: str
+            name: str
+            current_state: str
+            type: str
+            model: str = "Unknown"
+
+        @dataclass
+        class HubConfig:
+            identifier: str
+            name: str
+            lights: list[LightInfo]
+
+        class HubManager(BaseDeviceManager[HubConfig]):
+            def deserialize_device(self, data: dict) -> HubConfig | None:
+                return self.deserialize_device_auto(data, HubConfig)
+
+        manager = HubManager(temp_config_dir)
+
+        # Test data with list of dataclasses (like your Lutron example)
+        data = {
+            "identifier": "hub1",
+            "name": "My Hub",
+            "lights": [
+                {
+                    "device_id": "light1",
+                    "name": "Living_Room",
+                    "current_state": "on",
+                    "type": "dimmer",
+                    "model": "LUT-100",
+                },
+                {
+                    "device_id": "light2",
+                    "name": "Kitchen",
+                    "current_state": "off",
+                    "type": "switch",
+                    "model": "LUT-200",
+                },
+            ],
+        }
+
+        device = manager.deserialize_device(data)
+
+        assert device is not None
+        assert device.identifier == "hub1"
+        assert device.name == "My Hub"
+        assert len(device.lights) == 2
+
+        # Check first light
+        assert isinstance(device.lights[0], LightInfo)
+        assert device.lights[0].device_id == "light1"
+        assert device.lights[0].name == "Living_Room"
+        assert device.lights[0].current_state == "on"
+        assert device.lights[0].type == "dimmer"
+        assert device.lights[0].model == "LUT-100"
+
+        # Check second light
+        assert isinstance(device.lights[1], LightInfo)
+        assert device.lights[1].device_id == "light2"
+        assert device.lights[1].name == "Kitchen"
+        assert device.lights[1].current_state == "off"
+        assert device.lights[1].type == "switch"
+        assert device.lights[1].model == "LUT-200"
+
+    def test_deserialize_device_auto_with_empty_list(self, temp_config_dir):
+        """Test automatic deserialization with empty list of dataclasses."""
+
+        @dataclass
+        class LightInfo:
+            device_id: str
+            name: str
+
+        @dataclass
+        class HubConfig:
+            identifier: str
+            name: str
+            lights: list[LightInfo]
+
+        class HubManager(BaseDeviceManager[HubConfig]):
+            def deserialize_device(self, data: dict) -> HubConfig | None:
+                return self.deserialize_device_auto(data, HubConfig)
+
+        manager = HubManager(temp_config_dir)
+
+        # Test data with empty list
+        data = {"identifier": "hub1", "name": "My Hub", "lights": []}
+
+        device = manager.deserialize_device(data)
+
+        assert device is not None
+        assert device.identifier == "hub1"
+        assert device.lights == []
+
+    def test_deserialize_device_auto_with_primitive_types(self, temp_config_dir):
+        """Test automatic deserialization preserves primitive types."""
+
+        @dataclass
+        class SimpleConfig:
+            identifier: str
+            name: str
+            port: int
+            enabled: bool
+            tags: list[str]
+
+        class SimpleManager(BaseDeviceManager[SimpleConfig]):
+            def deserialize_device(self, data: dict) -> SimpleConfig | None:
+                return self.deserialize_device_auto(data, SimpleConfig)
+
+        manager = SimpleManager(temp_config_dir)
+
+        data = {
+            "identifier": "dev1",
+            "name": "Device 1",
+            "port": 8080,
+            "enabled": True,
+            "tags": ["tag1", "tag2"],
+        }
+
+        device = manager.deserialize_device(data)
+
+        assert device is not None
+        assert device.identifier == "dev1"
+        assert device.name == "Device 1"
+        assert device.port == 8080
+        assert device.enabled is True
+        assert device.tags == ["tag1", "tag2"]
+
+    def test_deserialize_device_auto_with_missing_fields(self, temp_config_dir):
+        """Test automatic deserialization with missing fields fails gracefully."""
+
+        @dataclass
+        class RequiredFieldsConfig:
+            identifier: str
+            name: str
+            required_field: str
+
+        class RequiredManager(BaseDeviceManager[RequiredFieldsConfig]):
+            def deserialize_device(self, data: dict) -> RequiredFieldsConfig | None:
+                return self.deserialize_device_auto(data, RequiredFieldsConfig)
+
+        manager = RequiredManager(temp_config_dir)
+
+        # Missing required_field
+        data = {"identifier": "dev1", "name": "Device 1"}
+
+        device = manager.deserialize_device(data)
+
+        # Should return None because required field is missing
+        assert device is None
+
+    def test_round_trip_with_nested_dataclasses(self, temp_config_dir):
+        """Test full round trip: save and load with nested dataclasses."""
+
+        @dataclass
+        class LightInfo:
+            device_id: str
+            name: str
+            brightness: int = 100
+
+        @dataclass
+        class HubConfig:
+            identifier: str
+            name: str
+            lights: list[LightInfo]
+
+        class HubManager(BaseDeviceManager[HubConfig]):
+            def deserialize_device(self, data: dict) -> HubConfig | None:
+                return self.deserialize_device_auto(data, HubConfig)
+
+        manager = HubManager(temp_config_dir)
+
+        # Create and add device with nested dataclasses
+        light1 = LightInfo("light1", "Living Room", 80)
+        light2 = LightInfo("light2", "Kitchen", 60)
+        hub = HubConfig("hub1", "My Hub", [light1, light2])
+
+        manager.add_or_update(hub)
+
+        # Create new manager instance to load from disk
+        manager2 = HubManager(temp_config_dir)
+
+        # Verify loaded device
+        loaded = manager2.get("hub1")
+        assert loaded is not None
+        assert loaded.identifier == "hub1"
+        assert loaded.name == "My Hub"
+        assert len(loaded.lights) == 2
+        assert isinstance(loaded.lights[0], LightInfo)
+        assert loaded.lights[0].device_id == "light1"
+        assert loaded.lights[0].brightness == 80

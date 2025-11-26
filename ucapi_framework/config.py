@@ -11,8 +11,8 @@ import dataclasses
 import json
 import logging
 import os
-from abc import ABC, abstractmethod
-from typing import Any, Callable, Generic, Iterator, TypeVar
+from abc import ABC
+from typing import Any, Callable, Generic, Iterator, TypeVar, get_args, get_origin
 
 _LOG = logging.getLogger(__name__)
 
@@ -68,6 +68,7 @@ class BaseDeviceManager(ABC, Generic[DeviceT]):
         data_path: str,
         add_handler: Callable[[DeviceT], None] | None = None,
         remove_handler: Callable[[DeviceT | None], None] | None = None,
+        device_class: type[DeviceT] | None = None,
     ):
         """
         Create a configuration instance.
@@ -75,12 +76,14 @@ class BaseDeviceManager(ABC, Generic[DeviceT]):
         :param data_path: Configuration path for the configuration file
         :param add_handler: Optional callback when device is added
         :param remove_handler: Optional callback when device is removed
+        :param device_class: The device dataclass type (optional, auto-detected from type hints if not provided)
         """
         self._data_path: str = data_path
         self._cfg_file_path: str = os.path.join(data_path, _CFG_FILENAME)
         self._config: list[DeviceT] = []
         self._add_handler = add_handler
         self._remove_handler = remove_handler
+        self._device_class = device_class
         self.load()
 
     @property
@@ -345,19 +348,169 @@ class BaseDeviceManager(ABC, Generic[DeviceT]):
         return True
 
     # ========================================================================
-    # Abstract Methods (Must be implemented by subclasses)
+    # Helper Methods
     # ========================================================================
 
-    @abstractmethod
+    @staticmethod
+    def _deserialize_field(field_value: Any, field_type: type) -> Any:
+        """
+        Recursively deserialize a field value based on its type annotation.
+
+        Handles:
+        - Dataclasses (single instances)
+        - Lists of dataclasses (e.g., list[LutronLightInfo])
+        - Primitive types (passed through)
+
+        :param field_value: The value to deserialize
+        :param field_type: The target type annotation
+        :return: Deserialized value
+        """
+        # Handle None values
+        if field_value is None:
+            return None
+
+        # Get the origin type (e.g., list from list[X])
+        origin = get_origin(field_type)
+
+        # Handle list types (e.g., list[SomeDataclass])
+        if origin is list:
+            args = get_args(field_type)
+            if args and isinstance(field_value, list):
+                item_type = args[0]
+                # If list items are dataclasses, deserialize each one
+                if dataclasses.is_dataclass(item_type):
+                    return [
+                        item_type(**item) if isinstance(item, dict) else item
+                        for item in field_value
+                    ]
+            # Not a list of dataclasses, return as-is
+            return field_value
+
+        # Handle single dataclass instances
+        if dataclasses.is_dataclass(field_type) and isinstance(field_value, dict):
+            return field_type(**field_value)
+
+        # For all other types (str, int, bool, etc.), return as-is
+        return field_value
+
+    def deserialize_device_auto(
+        self, data: dict, device_class: type[DeviceT]
+    ) -> DeviceT | None:
+        """
+        Automatically deserialize device configuration with nested dataclass support.
+
+        This helper method automatically handles:
+        - Nested dataclasses
+        - Lists of dataclasses (e.g., list[LutronLightInfo])
+        - Primitive types
+
+        Use this in your deserialize_device() implementation:
+
+        Example:
+            def deserialize_device(self, data: dict) -> MyDeviceConfig | None:
+                return self.deserialize_device_auto(data, MyDeviceConfig)
+
+        For backward compatibility or custom logic, override specific fields:
+
+        Example:
+            def deserialize_device(self, data: dict) -> MyDeviceConfig | None:
+                # Let auto-deserialize handle nested dataclasses
+                device = self.deserialize_device_auto(data, MyDeviceConfig)
+                if device:
+                    # Add custom migration logic
+                    if not hasattr(device, 'new_field'):
+                        device.new_field = "default_value"
+                return device
+
+        :param data: Dictionary with device data
+        :param device_class: The device dataclass type
+        :return: Device configuration or None if invalid
+        """
+        try:
+            # Get all fields from the dataclass
+            field_dict = {}
+            for field in dataclasses.fields(device_class):
+                field_name = field.name
+                if field_name in data:
+                    # Deserialize the field value based on its type
+                    field_dict[field_name] = self._deserialize_field(
+                        data[field_name], field.type
+                    )
+
+            # Create the device instance
+            return device_class(**field_dict)
+
+        except (TypeError, ValueError) as err:
+            _LOG.error("Failed to deserialize device: %s", err)
+            return None
+
+    # ========================================================================
+    # Deserialization (Can be overridden for custom logic)
+    # ========================================================================
+
     def deserialize_device(self, data: dict) -> DeviceT | None:
         """
         Deserialize device configuration from dictionary.
 
-        This should handle missing fields and provide defaults for backward compatibility.
+        **DEFAULT IMPLEMENTATION**: Uses deserialize_device_auto() with the device class
+        provided during initialization or inferred from the Generic type parameter.
+
+        Most integrations can use the default implementation without overriding:
+
+            class MyDeviceManager(BaseDeviceManager[MyDeviceConfig]):
+                pass  # No override needed!
+
+        Or explicitly pass the device class:
+
+            manager = MyDeviceManager(data_path, device_class=MyDeviceConfig)
+
+        **Override only if** you need custom logic:
+
+            def deserialize_device(self, data: dict) -> MyDeviceConfig | None:
+                # Auto-deserialize handles nested dataclasses
+                device = self.deserialize_device_auto(data, MyDeviceConfig)
+                if device:
+                    # Custom migration logic
+                    if 'old_field' in data:
+                        device.new_field = migrate_value(data['old_field'])
+                    # Custom post-processing
+                    for light in device.lights:
+                        light.name = light.name.replace("_", " ")
+                return device
 
         :param data: Dictionary with device data
         :return: Device configuration or None if invalid
         """
+        # Get device class if not provided during init
+        if self._device_class is None:
+            # Try to infer from Generic type parameter
+            device_class = self._infer_device_class()
+            if device_class is None:
+                raise TypeError(
+                    f"{type(self).__name__} must either:\n"
+                    f"1. Pass device_class to __init__: MyManager(path, device_class=MyConfig)\n"
+                    f"2. Override deserialize_device() with custom logic\n"
+                    f"3. Use proper Generic syntax: class MyManager(BaseDeviceManager[MyConfig])"
+                )
+            self._device_class = device_class
+
+        # Use auto-deserialize with the device class
+        return self.deserialize_device_auto(data, self._device_class)
+
+    def _infer_device_class(self) -> type[DeviceT] | None:
+        """
+        Infer device class from Generic type parameter.
+
+        :return: Device class or None if cannot be inferred
+        """
+        # Get the class's __orig_bases__ which contains Generic[DeviceT] information
+        for base in getattr(type(self), "__orig_bases__", []):
+            origin = get_origin(base)
+            if origin is BaseDeviceManager:
+                args = get_args(base)
+                if args:
+                    return args[0]
+        return None
 
     # ========================================================================
     # Optional Override Methods

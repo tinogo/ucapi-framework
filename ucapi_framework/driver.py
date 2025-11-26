@@ -398,9 +398,40 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
                 _LOG.debug("Entity %s is not configured, ignoring", entity_id)
                 continue
 
-            self.api.configured_entities.update_attributes(
-                entity_id, {media_player.Attributes.STATE: state}
-            )  # Use media_player state as a stand-in
+            # Update STATE attribute for the appropriate entity type
+            match configured_entity.entity_type:
+                case EntityTypes.BUTTON:
+                    self.api.configured_entities.update_attributes(
+                        entity_id, {button.Attributes.STATE: state}
+                    )
+                case EntityTypes.CLIMATE:
+                    self.api.configured_entities.update_attributes(
+                        entity_id, {climate.Attributes.STATE: state}
+                    )
+                case EntityTypes.COVER:
+                    self.api.configured_entities.update_attributes(
+                        entity_id, {cover.Attributes.STATE: state}
+                    )
+                case EntityTypes.LIGHT:
+                    self.api.configured_entities.update_attributes(
+                        entity_id, {light.Attributes.STATE: state}
+                    )
+                case EntityTypes.MEDIA_PLAYER:
+                    self.api.configured_entities.update_attributes(
+                        entity_id, {media_player.Attributes.STATE: state}
+                    )
+                case EntityTypes.REMOTE:
+                    self.api.configured_entities.update_attributes(
+                        entity_id, {remote.Attributes.STATE: state}
+                    )
+                case EntityTypes.SENSOR:
+                    self.api.configured_entities.update_attributes(
+                        entity_id, {sensor.Attributes.STATE: state}
+                    )
+                case EntityTypes.SWITCH:
+                    self.api.configured_entities.update_attributes(
+                        entity_id, {switch.Attributes.STATE: state}
+                    )
 
     async def on_device_disconnected(self, device_id: str) -> None:
         """
@@ -415,10 +446,50 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
             if configured_entity is None:
                 continue
 
-            self.api.configured_entities.update_attributes(
-                entity_id,
-                {media_player.Attributes.STATE: media_player.States.UNAVAILABLE},
-            )  # Use media_player state as a stand-in
+            # Update STATE attribute for the appropriate entity type
+            match configured_entity.entity_type:
+                case EntityTypes.BUTTON:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {button.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.CLIMATE:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {climate.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.COVER:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {cover.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.LIGHT:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {light.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.MEDIA_PLAYER:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {
+                            media_player.Attributes.STATE: media_player.States.UNAVAILABLE
+                        },
+                    )
+                case EntityTypes.REMOTE:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {remote.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.SENSOR:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {sensor.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.SWITCH:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {switch.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
 
     async def on_device_connection_error(self, device_id: str, message: str) -> None:
         """
@@ -434,10 +505,50 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
             if configured_entity is None:
                 continue
 
-            self.api.configured_entities.update_attributes(
-                entity_id,
-                {media_player.Attributes.STATE: media_player.States.UNAVAILABLE},
-            )  # Use media_player state as a stand-in
+            # Update STATE attribute for the appropriate entity type
+            match configured_entity.entity_type:
+                case EntityTypes.BUTTON:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {button.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.CLIMATE:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {climate.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.COVER:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {cover.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.LIGHT:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {light.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.MEDIA_PLAYER:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {
+                            media_player.Attributes.STATE: media_player.States.UNAVAILABLE
+                        },
+                    )
+                case EntityTypes.REMOTE:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {remote.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.SENSOR:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {sensor.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
+                case EntityTypes.SWITCH:
+                    self.api.configured_entities.update_attributes(
+                        entity_id,
+                        {switch.Attributes.STATE: media_player.States.UNAVAILABLE},
+                    )
 
     async def on_device_update(
         self,
@@ -820,6 +931,65 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
     # Entity ID Methods (should be overridden together if custom format used)
     # ========================================================================
 
+    def entity_type_from_entity_id(self, entity_id: str) -> str | None:
+        """
+        Extract entity type from entity identifier.
+
+        DEFAULT IMPLEMENTATION: Parses entity IDs created by create_entity_id().
+        Returns the entity type (first part before the period):
+        - "media_player.device_123" → returns "media_player"
+        - "light.hub_1.light_bedroom" → returns "light"
+
+        **IMPORTANT**: If you override create_entities() to use a custom entity ID format,
+        you MUST also override this method to match your custom format. The default
+        implementation will detect this and raise an error to prevent bugs.
+
+        Example custom override:
+            def create_entities(self, device_config, device):
+                # Custom format: entity_id IS the device_id
+                return [PSNMediaPlayer(device_config.identifier, ...)]
+
+            def entity_type_from_entity_id(self, entity_id: str) -> str | None:
+                # For PSN, all entities are media players
+                return "media_player"
+
+        :param entity_id: Entity identifier (e.g., "media_player.device_123")
+        :return: Entity type string or None
+        :raises NotImplementedError: If create_entities was overridden but this method wasn't
+        """
+        # Check if create_entities was overridden (indicating custom entity ID format)
+        create_entities_overridden = (
+            type(self).create_entities is not BaseIntegrationDriver.create_entities
+        )
+
+        if create_entities_overridden:
+            # User has custom entity creation, they must override this method too
+            entity_type_from_entity_overridden = (
+                type(self).entity_type_from_entity_id
+                is not BaseIntegrationDriver.entity_type_from_entity_id
+            )
+
+            if not entity_type_from_entity_overridden:
+                raise NotImplementedError(
+                    f"{type(self).__name__}.create_entities() is overridden but "
+                    f"entity_type_from_entity_id() is not. When you override create_entities() "
+                    f"with a custom entity ID format, you must also override "
+                    f"entity_type_from_entity_id() to parse your custom format. "
+                )
+
+        # Default implementation: parse standard format from create_entity_id()
+        if not entity_id or "." not in entity_id:
+            return None
+
+        # Split on period: "entity_type.device_id" or "entity_type.device_id.entity_id"
+        parts = entity_id.split(".")
+
+        if len(parts) < 1:
+            return None
+
+        # First part is always the entity_type in create_entity_id() format
+        return parts[0]
+
     def device_from_entity_id(self, entity_id: str) -> str | None:
         """
         Extract device identifier from entity identifier.
@@ -878,6 +1048,79 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
 
         # Second part is always the device_id in create_entity_id() format
         return parts[1]
+
+    def entity_from_entity_id(self, entity_id: str) -> str | None:
+        """
+        Extract sub-entity identifier from entity identifier (if present).
+
+        DEFAULT IMPLEMENTATION: Parses entity IDs created by create_entity_id().
+        Returns the sub-entity ID (third part) if present, None otherwise:
+        - Simple: "entity_type.device_id" → returns None (no sub-entity)
+        - With sub-entity: "entity_type.device_id.entity_id" → returns "entity_id"
+
+        **IMPORTANT**: If you override create_entities() to use a custom entity ID format
+        WITH sub-entities (3-part format), you MUST also override this method. The simple
+        2-part format doesn't require override since it always returns None.
+
+        Example custom override:
+            def create_entities(self, device_config, device):
+                # Custom format with sub-entities
+                return [
+                    Light(f"{device_config.id}_zone1", ...),
+                    Light(f"{device_config.id}_zone2", ...)
+                ]
+
+            def entity_from_entity_id(self, entity_id: str) -> str | None:
+                # For custom format: "deviceid_zonename"
+                if "_" in entity_id:
+                    return entity_id.split("_", 1)[1]  # Returns "zone1", "zone2"
+                return None
+
+        :param entity_id: Entity identifier (e.g., "light.hub_1.bedroom")
+        :return: Sub-entity identifier or None
+        :raises NotImplementedError: If create_entities was overridden and uses 3-part format but this method wasn't
+        """
+        # Check if create_entities was overridden (indicating custom entity ID format)
+        create_entities_overridden = (
+            type(self).create_entities is not BaseIntegrationDriver.create_entities
+        )
+
+        if create_entities_overridden:
+            # User has custom entity creation, they must override this method too IF they use 3-part format
+            entity_from_entity_overridden = (
+                type(self).entity_from_entity_id
+                is not BaseIntegrationDriver.entity_from_entity_id
+            )
+
+            # Default implementation: parse standard format from create_entity_id()
+            if not entity_id or "." not in entity_id:
+                return None
+
+            # Split on period: "entity_type.device_id" or "entity_type.device_id.entity_id"
+            parts = entity_id.split(".")
+
+            # If we have 3 parts and method wasn't overridden, that's an error
+            if len(parts) >= 3 and not entity_from_entity_overridden:
+                raise NotImplementedError(
+                    f"{type(self).__name__}.create_entities() is overridden and uses "
+                    f"3-part entity IDs (entity_type.device_id.entity_id), but "
+                    f"entity_from_entity_id() is not overridden. When you override "
+                    f"create_entities() with a custom 3-part entity ID format, you must "
+                    f"also override entity_from_entity_id() to parse your custom format. "
+                )
+
+        # Default implementation: parse standard format from create_entity_id()
+        if not entity_id or "." not in entity_id:
+            return None
+
+        # Split on period: "entity_type.device_id" or "entity_type.device_id.entity_id"
+        parts = entity_id.split(".", 2)  # Split into at most 3 parts
+
+        # Return everything after the second period if present, None otherwise
+        if len(parts) >= 3:
+            return parts[2]  # This will be "entity_id" or "entity.with.dots"
+
+        return None
 
     def get_entity_ids_for_device(self, device_id: str) -> list[str]:
         """
