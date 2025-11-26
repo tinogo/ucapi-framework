@@ -28,6 +28,7 @@ class DeviceForTests(BaseDeviceInterface):
     def __init__(self, device_config, loop=None, config_manager=None):
         super().__init__(device_config, loop, config_manager)
         self._connected = False
+        self._state = None
 
     @property
     def identifier(self) -> str:
@@ -49,9 +50,18 @@ class DeviceForTests(BaseDeviceInterface):
     def is_connected(self) -> bool:
         return self._connected
 
-    async def connect(self) -> None:
+    @property
+    def state(self):
+        return self._state
+
+    @state.setter
+    def state(self, value):
+        self._state = value
+
+    async def connect(self) -> bool:
         self._connected = True
         self.events.emit(DeviceEvents.CONNECTED, self.identifier)
+        return True
 
     async def disconnect(self) -> None:
         self._connected = False
@@ -1103,81 +1113,989 @@ class TestEntityIdHelpers:
 
     def test_create_entity_id_with_enum(self):
         """Test creating entity ID with EntityTypes enum."""
-        entity_id = create_entity_id("device_123", EntityTypes.MEDIA_PLAYER)
+        entity_id = create_entity_id(EntityTypes.MEDIA_PLAYER, "device_123")
         assert entity_id == "media_player.device_123"
 
-        entity_id = create_entity_id("my_device", EntityTypes.REMOTE)
+        entity_id = create_entity_id(EntityTypes.REMOTE, "my_device")
         assert entity_id == "remote.my_device"
 
-        entity_id = create_entity_id("light_1", EntityTypes.LIGHT)
+        entity_id = create_entity_id(EntityTypes.LIGHT, "light_1")
         assert entity_id == "light.light_1"
 
     def test_create_entity_id_with_string(self):
         """Test creating entity ID with string entity type."""
-        entity_id = create_entity_id("device_123", "media_player")
+        entity_id = create_entity_id("media_player", "device_123")
         assert entity_id == "media_player.device_123"
 
-        entity_id = create_entity_id("my_device", "remote")
+        entity_id = create_entity_id("remote", "my_device")
         assert entity_id == "remote.my_device"
 
-        entity_id = create_entity_id("custom_id", "custom_type")
+        entity_id = create_entity_id("custom_type", "custom_id")
         assert entity_id == "custom_type.custom_id"
 
     def test_create_entity_id_various_device_ids(self):
         """Test create_entity_id with various device ID formats."""
         # Simple ID
-        assert create_entity_id("dev1", EntityTypes.MEDIA_PLAYER) == "media_player.dev1"
+        assert create_entity_id(EntityTypes.MEDIA_PLAYER, "dev1") == "media_player.dev1"
 
         # ID with underscores
         assert (
-            create_entity_id("my_device_123", EntityTypes.MEDIA_PLAYER)
+            create_entity_id(EntityTypes.MEDIA_PLAYER, "my_device_123")
             == "media_player.my_device_123"
         )
 
         # ID with dashes
         assert (
-            create_entity_id("device-abc-123", EntityTypes.REMOTE)
+            create_entity_id(EntityTypes.REMOTE, "device-abc-123")
             == "remote.device-abc-123"
         )
 
         # Numeric ID
-        assert create_entity_id("12345", EntityTypes.SWITCH) == "switch.12345"
+        assert create_entity_id(EntityTypes.SWITCH, "12345") == "switch.12345"
 
     def test_create_entity_id_with_sub_entity(self):
         """Test creating entity ID with optional sub-entity parameter."""
         # Hub with multiple lights
-        entity_id = create_entity_id("hub_1", EntityTypes.LIGHT, "bedroom_light")
+        entity_id = create_entity_id(EntityTypes.LIGHT, "hub_1", "bedroom_light")
         assert entity_id == "light.hub_1.bedroom_light"
 
         # Multi-zone receiver
-        entity_id = create_entity_id("receiver_abc", EntityTypes.MEDIA_PLAYER, "zone_2")
+        entity_id = create_entity_id(EntityTypes.MEDIA_PLAYER, "receiver_abc", "zone_2")
         assert entity_id == "media_player.receiver_abc.zone_2"
 
         # String entity type with sub-entity
-        entity_id = create_entity_id("device_123", "light", "light_1")
+        entity_id = create_entity_id("light", "device_123", "light_1")
         assert entity_id == "light.device_123.light_1"
 
     def test_create_entity_id_sub_entity_with_various_formats(self):
         """Test sub-entity parameter with various ID formats."""
         # Numeric sub-entity
         assert (
-            create_entity_id("hub_main", EntityTypes.LIGHT, "1") == "light.hub_main.1"
+            create_entity_id(EntityTypes.LIGHT, "hub_main", "1") == "light.hub_main.1"
         )
 
         # Sub-entity with underscores
         assert (
-            create_entity_id("hub_1", EntityTypes.SWITCH, "switch_bedroom_1")
+            create_entity_id(EntityTypes.SWITCH, "hub_1", "switch_bedroom_1")
             == "switch.hub_1.switch_bedroom_1"
         )
 
         # Sub-entity with dashes
         assert (
-            create_entity_id("hub-abc", EntityTypes.COVER, "cover-1")
+            create_entity_id(EntityTypes.COVER, "hub-abc", "cover-1")
             == "cover.hub-abc.cover-1"
         )
 
         # Complex nested structure
         assert (
-            create_entity_id("bridge_123", EntityTypes.SENSOR, "temp_sensor_kitchen")
+            create_entity_id(EntityTypes.SENSOR, "bridge_123", "temp_sensor_kitchen")
             == "sensor.bridge_123.temp_sensor_kitchen"
         )
+
+
+class TestHubBasedIntegration:
+    """Tests for hub-based integrations with require_connection_before_registry=True."""
+
+    @pytest.mark.asyncio
+    async def test_on_subscribe_entities_hub_based_new_device(self):
+        """Test subscribe entities with hub-based integration for new device."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+            require_connection_before_registry=True,
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+
+        # Mock config manager to return device config
+        driver.config = MagicMock()
+        driver.config.get = MagicMock(
+            return_value=DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        )
+
+        entity_ids = ["media_player.dev1"]
+
+        # Mock configured_entities.get to return entity info
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.MEDIA_PLAYER
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.update_attributes = MagicMock()
+
+        await driver.on_subscribe_entities(entity_ids)
+
+        # Device should be added and connected
+        assert "dev1" in driver._configured_devices
+        device = driver._configured_devices["dev1"]
+        assert device.is_connected is True
+
+    @pytest.mark.asyncio
+    async def test_on_subscribe_entities_hub_based_existing_disconnected_device(self):
+        """Test subscribe entities reconnects disconnected hub device."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+            require_connection_before_registry=True,
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+
+        # Mock config manager
+        driver.config = MagicMock()
+        driver.config.get = MagicMock(
+            return_value=DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        )
+
+        # Add a device that's not connected
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver._add_device_instance(config)
+        device = driver._configured_devices["dev1"]
+        assert device.is_connected is False
+
+        entity_ids = ["media_player.dev1"]
+
+        # Mock configured_entities.get to return entity info
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.MEDIA_PLAYER
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.update_attributes = MagicMock()
+
+        await driver.on_subscribe_entities(entity_ids)
+
+        # Device should be connected
+        assert device.is_connected is True
+
+    @pytest.mark.asyncio
+    async def test_on_subscribe_entities_hub_based_no_config(self):
+        """Test subscribe entities with hub-based when device config not found."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+            require_connection_before_registry=True,
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+
+        # Config returns None
+        driver.config = MagicMock()
+        driver.config.get = MagicMock(return_value=None)
+
+        entity_ids = ["media_player.dev1"]
+
+        await driver.on_subscribe_entities(entity_ids)
+
+        # Device should not be added
+        assert "dev1" not in driver._configured_devices
+
+    @pytest.mark.asyncio
+    async def test_on_device_added_hub_based(self):
+        """Test on_device_added schedules async task for hub-based integration."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+            require_connection_before_registry=True,
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+
+        # Call on_device_added
+        driver.on_device_added(config)
+
+        # Give the background task time to run
+        await asyncio.sleep(0.1)
+
+        # Device should be added and connected
+        assert "dev1" in driver._configured_devices
+        device = driver._configured_devices["dev1"]
+        assert device.is_connected is True
+
+
+class TestAsyncDeviceMethods:
+    """Tests for async device management methods."""
+
+    @pytest.mark.asyncio
+    async def test_async_add_configured_device_success(self):
+        """Test async_add_configured_device succeeds when device connects."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+
+        result = await driver.async_add_configured_device(config)
+
+        assert result is True
+        assert "dev1" in driver._configured_devices
+        assert driver._configured_devices["dev1"].is_connected is True
+        # Check entities were registered
+        assert len(driver.api.available_entities._entities) > 0
+
+    @pytest.mark.asyncio
+    async def test_async_add_configured_device_failure(self):
+        """Test async_add_configured_device fails when device doesn't connect."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+
+        # Add device first, then mock its connect to fail
+        driver._add_device_instance(config)
+        device = driver._configured_devices["dev1"]
+
+        async def mock_connect():
+            return False
+
+        device.connect = mock_connect
+
+        result = await driver.async_add_configured_device(config)
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_ensure_device_connected_already_connected(self):
+        """Test _ensure_device_connected returns True when device already connected."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver._add_device_instance(config)
+        device = driver._configured_devices["dev1"]
+        await device.connect()
+
+        result = await driver._ensure_device_connected("dev1")
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_ensure_device_connected_not_found(self):
+        """Test _ensure_device_connected returns False when device not found."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+        )
+        driver.api = MagicMock()
+        driver.api.set_device_state = AsyncMock()
+
+        result = await driver._ensure_device_connected("nonexistent")
+
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_ensure_device_connected_with_retries(self):
+        """Test _ensure_device_connected retries on failure."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver._add_device_instance(config)
+        device = driver._configured_devices["dev1"]
+
+        # Make connect fail twice then succeed
+        connect_count = 0
+
+        async def mock_connect():
+            nonlocal connect_count
+            connect_count += 1
+            if connect_count < 3:
+                return False
+            device._connected = True
+            return True
+
+        device.connect = mock_connect
+
+        result = await driver._ensure_device_connected("dev1")
+
+        assert result is True
+        assert connect_count == 3
+
+    @pytest.mark.asyncio
+    async def test_ensure_device_connected_all_retries_fail(self):
+        """Test _ensure_device_connected returns False when all retries fail."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver._add_device_instance(config)
+        device = driver._configured_devices["dev1"]
+
+        # Make connect always fail
+        async def mock_connect():
+            return False
+
+        device.connect = mock_connect
+
+        result = await driver._ensure_device_connected("dev1")
+
+        assert result is False
+
+
+class TestAsyncRegisterEntities:
+    """Tests for async_register_available_entities."""
+
+    @pytest.mark.asyncio
+    async def test_async_register_warns_when_not_overridden(self, caplog):
+        """Test async_register_available_entities warns when require_connection_before_registry is True."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+            require_connection_before_registry=True,
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        device = DeviceForTests(config, loop)
+
+        await driver.async_register_available_entities(config, device)
+
+        # Should have logged a warning
+        assert (
+            "async_register_available_entities() called but not overridden"
+            in caplog.text
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_register_no_warn_when_flag_false(self, caplog):
+        """Test async_register_available_entities doesn't warn when flag is False."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+            require_connection_before_registry=False,
+        )
+        driver.api = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        device = DeviceForTests(config, loop)
+
+        await driver.async_register_available_entities(config, device)
+
+        # Should NOT have logged a warning
+        assert (
+            "async_register_available_entities() called but not overridden"
+            not in caplog.text
+        )
+
+
+class TestRefreshEntityState:
+    """Tests for refresh_entity_state with different entity types."""
+
+    def _create_driver(self):
+        """Create a driver for refresh_entity_state testing."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+        return driver
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_device_not_found(self):
+        """Test refresh_entity_state when device not found."""
+        driver = self._create_driver()
+        driver.api.configured_entities.get = MagicMock(return_value=None)
+
+        # Should not raise
+        await driver.refresh_entity_state("media_player.nonexistent")
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_entity_not_configured(self):
+        """Test refresh_entity_state when entity not configured."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        driver.api.configured_entities.get = MagicMock(return_value=None)
+
+        # Should not raise
+        await driver.refresh_entity_state("media_player.dev1")
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_media_player(self):
+        """Test refresh_entity_state for media_player entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+        device = driver._configured_devices["dev1"]
+        await device.connect()
+        device._state = "playing"
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.MEDIA_PLAYER
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        driver.api.configured_entities.update_attributes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_button(self):
+        """Test refresh_entity_state for button entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+        device = driver._configured_devices["dev1"]
+        await device.connect()
+        device._state = "on"
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.BUTTON
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        driver.api.configured_entities.update_attributes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_light(self):
+        """Test refresh_entity_state for light entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+        device = driver._configured_devices["dev1"]
+        await device.connect()
+        device._state = "on"
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.LIGHT
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        driver.api.configured_entities.update_attributes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_switch(self):
+        """Test refresh_entity_state for switch entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+        device = driver._configured_devices["dev1"]
+        await device.connect()
+        device._state = "on"
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.SWITCH
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        driver.api.configured_entities.update_attributes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_climate(self):
+        """Test refresh_entity_state for climate entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+        device = driver._configured_devices["dev1"]
+        await device.connect()
+        device._state = "on"
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.CLIMATE
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        driver.api.configured_entities.update_attributes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_cover(self):
+        """Test refresh_entity_state for cover entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+        device = driver._configured_devices["dev1"]
+        await device.connect()
+        device._state = "on"
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.COVER
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        driver.api.configured_entities.update_attributes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_remote(self):
+        """Test refresh_entity_state for remote entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+        device = driver._configured_devices["dev1"]
+        await device.connect()
+        device._state = "on"
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.REMOTE
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        driver.api.configured_entities.update_attributes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_sensor(self):
+        """Test refresh_entity_state for sensor entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+        device = driver._configured_devices["dev1"]
+        await device.connect()
+        device._state = "on"
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.SENSOR
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        driver.api.configured_entities.update_attributes.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_disconnected(self):
+        """Test refresh_entity_state when device is disconnected."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+        # Device is not connected
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.MEDIA_PLAYER
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        # Should update with UNAVAILABLE state
+        driver.api.configured_entities.update_attributes.assert_called_once()
+
+
+class TestOnSubscribeEntitiesEdgeCases:
+    """Tests for on_subscribe_entities edge cases."""
+
+    def _create_driver(self):
+        """Create a driver for subscribe testing."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+        return driver
+
+    @pytest.mark.asyncio
+    async def test_on_subscribe_entities_empty_list(self):
+        """Test on_subscribe_entities with empty entity list."""
+        driver = self._create_driver()
+        await driver.on_subscribe_entities([])
+
+        # Should return early without error
+        assert len(driver._configured_devices) == 0
+
+    @pytest.mark.asyncio
+    async def test_on_subscribe_entities_invalid_entity_id(self):
+        """Test on_subscribe_entities with invalid entity ID format."""
+        driver = self._create_driver()
+        # Entity ID without dots can't be parsed
+        await driver.on_subscribe_entities(["invalid_entity_id"])
+
+        # Should return early without adding any devices
+        assert len(driver._configured_devices) == 0
+
+    @pytest.mark.asyncio
+    async def test_on_subscribe_entities_no_device_config(self):
+        """Test on_subscribe_entities when device config not found."""
+        driver = self._create_driver()
+        driver.config = MagicMock()
+        driver.config.get = MagicMock(return_value=None)
+
+        entity_ids = ["media_player.dev1"]
+
+        # Mock configured_entities.get to return None (not configured yet)
+        driver.api.configured_entities.get = MagicMock(return_value=None)
+
+        await driver.on_subscribe_entities(entity_ids)
+
+        # Should not add any device
+        assert "dev1" not in driver._configured_devices
+
+
+class TestDeviceEventHandlersEntityTypes:
+    """Tests for device event handlers with different entity types."""
+
+    def _create_driver(self):
+        """Create a driver for event handler testing."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+        return driver
+
+    @pytest.mark.asyncio
+    async def test_on_device_connected_different_entity_types(self):
+        """Test on_device_connected updates various entity types."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+        device = driver._configured_devices["dev1"]
+        device._state = "on"
+
+        # Test with different entity types
+        for entity_type in [
+            EntityTypes.BUTTON,
+            EntityTypes.CLIMATE,
+            EntityTypes.COVER,
+            EntityTypes.LIGHT,
+            EntityTypes.REMOTE,
+            EntityTypes.SENSOR,
+            EntityTypes.SWITCH,
+        ]:
+            mock_entity = MagicMock()
+            mock_entity.entity_type = entity_type
+            driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+            driver.api.configured_entities.update_attributes = MagicMock()
+
+            await driver.on_device_connected("dev1")
+
+            driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_on_device_disconnected_different_entity_types(self):
+        """Test on_device_disconnected updates various entity types."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        # Test with different entity types
+        for entity_type in [
+            EntityTypes.BUTTON,
+            EntityTypes.CLIMATE,
+            EntityTypes.COVER,
+            EntityTypes.LIGHT,
+            EntityTypes.REMOTE,
+            EntityTypes.SENSOR,
+            EntityTypes.SWITCH,
+        ]:
+            mock_entity = MagicMock()
+            mock_entity.entity_type = entity_type
+            driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+            driver.api.configured_entities.update_attributes = MagicMock()
+
+            await driver.on_device_disconnected("dev1")
+
+            driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_on_device_connection_error_different_entity_types(self):
+        """Test on_device_connection_error updates various entity types."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        # Test with different entity types
+        for entity_type in [
+            EntityTypes.BUTTON,
+            EntityTypes.CLIMATE,
+            EntityTypes.COVER,
+            EntityTypes.LIGHT,
+            EntityTypes.REMOTE,
+            EntityTypes.SENSOR,
+            EntityTypes.SWITCH,
+        ]:
+            mock_entity = MagicMock()
+            mock_entity.entity_type = entity_type
+            driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+            driver.api.configured_entities.update_attributes = MagicMock()
+
+            await driver.on_device_connection_error("dev1", "Test error")
+
+            driver.api.configured_entities.update_attributes.assert_called()
+
+
+class TestOnDeviceUpdateEntityTypes:
+    """Tests for on_device_update with various entity types."""
+
+    def _create_driver(self):
+        """Create a driver for update testing."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            loop=loop,
+            device_class=DeviceForTests,
+            entity_classes=[media_player.MediaPlayer],
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+        return driver
+
+    @pytest.mark.asyncio
+    async def test_on_device_update_button(self):
+        """Test on_device_update for button entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.BUTTON
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.contains = MagicMock(return_value=True)
+        driver.api.configured_entities.update_attributes = MagicMock()
+
+        await driver.on_device_update("dev1", {"state": "on"})
+
+        driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_on_device_update_climate(self):
+        """Test on_device_update for climate entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.CLIMATE
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.contains = MagicMock(return_value=True)
+        driver.api.configured_entities.update_attributes = MagicMock()
+
+        await driver.on_device_update(
+            "dev1",
+            {
+                "state": "on",
+                "current_temperature": 22,
+                "target_temperature": 24,
+            },
+        )
+
+        driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_on_device_update_cover(self):
+        """Test on_device_update for cover entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.COVER
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.contains = MagicMock(return_value=True)
+        driver.api.configured_entities.update_attributes = MagicMock()
+
+        await driver.on_device_update(
+            "dev1",
+            {
+                "state": "open",
+                "position": 75,
+            },
+        )
+
+        driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_on_device_update_light(self):
+        """Test on_device_update for light entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.LIGHT
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.contains = MagicMock(return_value=True)
+        driver.api.configured_entities.update_attributes = MagicMock()
+
+        await driver.on_device_update(
+            "dev1",
+            {
+                "state": "on",
+                "brightness": 255,
+                "hue": 180,
+                "saturation": 100,
+            },
+        )
+
+        driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_on_device_update_remote(self):
+        """Test on_device_update for remote entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.REMOTE
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.contains = MagicMock(return_value=True)
+        driver.api.configured_entities.update_attributes = MagicMock()
+
+        await driver.on_device_update("dev1", {"state": "on"})
+
+        driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_on_device_update_sensor(self):
+        """Test on_device_update for sensor entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.SENSOR
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.contains = MagicMock(return_value=True)
+        driver.api.configured_entities.update_attributes = MagicMock()
+
+        await driver.on_device_update(
+            "dev1",
+            {
+                "state": "on",
+                "value": 42,
+                "unit": "°C",
+            },
+        )
+
+        driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_on_device_update_switch(self):
+        """Test on_device_update for switch entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.SWITCH
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.contains = MagicMock(return_value=True)
+        driver.api.configured_entities.update_attributes = MagicMock()
+
+        await driver.on_device_update("dev1", {"state": "on"})
+
+        driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_on_device_update_unknown_entity_type(self, caplog):
+        """Test on_device_update with unknown entity type logs warning."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = "unknown_type"
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.contains = MagicMock(return_value=True)
+
+        await driver.on_device_update("dev1", {"state": "on"})
+
+        assert "Unknown entity type" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_on_device_update_none_update(self, caplog):
+        """Test on_device_update with None update logs warning."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        await driver.on_device_update("dev1", None)
+
+        assert "Received None update" in caplog.text
