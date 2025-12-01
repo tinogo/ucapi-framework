@@ -26,6 +26,8 @@ from ucapi import (
     sensor,
     switch,
 )
+
+from ucapi_framework.config import BaseConfigManager
 from .device import BaseDeviceInterface, DeviceEvents
 
 # Type variables for generic device and entity types
@@ -150,7 +152,7 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         self._setup_event_handlers()
 
     @property
-    def config_manager(self):
+    def config_manager(self) -> BaseConfigManager | None:
         """
         Get the configuration manager.
 
@@ -159,7 +161,7 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         return self._config_manager
 
     @config_manager.setter
-    def config_manager(self, value) -> None:
+    def config_manager(self, value: BaseConfigManager | None) -> None:
         """
         Set the configuration manager.
 
@@ -181,7 +183,9 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         Example:
             driver = MyDriver(device_class=MyDevice, entity_classes=[EntityTypes.MEDIA_PLAYER])
             driver.config_manager = my_config_manager
-            await driver.register_all_configured_devices(connect=True)
+        :param connect: Whether to connect devices after adding them (default: False).
+                         Only applies when require_connection_before_registry=False.
+                         When require_connection_before_registry=True, devices are always connected.
 
         :param connect: Whether to connect devices after adding them (default: False)
         """

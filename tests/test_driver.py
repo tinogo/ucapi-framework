@@ -398,6 +398,195 @@ class TestBaseIntegrationDriver:
 
         assert len(driver._configured_devices) == 1
 
+    @pytest.mark.asyncio
+    async def test_register_all_configured_devices_without_connection_requirement(
+        self, mock_loop
+    ):
+        """Test registration with require_connection_before_registry=False uses add_configured_device."""
+        driver = ConcreteDriver(
+            DeviceForTests,
+            [media_player.MediaPlayer],
+            require_connection_before_registry=False,
+            loop=mock_loop,
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+
+        # Create mock config manager
+        config1 = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        config2 = DeviceConfigForTests("dev2", "Device 2", "192.168.1.2")
+        mock_config_manager = MagicMock()
+        mock_config_manager.all.return_value = [config1, config2]
+        driver.config_manager = mock_config_manager
+
+        await driver.register_all_configured_devices(connect=False)
+
+        # Both devices should be registered
+        assert "dev1" in driver._configured_devices
+        assert "dev2" in driver._configured_devices
+        assert len(driver._configured_devices) == 2
+
+        # Devices should NOT be connected (connect=False)
+        assert driver._configured_devices["dev1"].is_connected is False
+        assert driver._configured_devices["dev2"].is_connected is False
+
+    @pytest.mark.asyncio
+    async def test_register_all_configured_devices_with_connection_requirement(
+        self, mock_loop
+    ):
+        """Test registration with require_connection_before_registry=True uses async_add_configured_device."""
+        driver = ConcreteDriver(
+            DeviceForTests,
+            [media_player.MediaPlayer],
+            require_connection_before_registry=True,
+            loop=mock_loop,
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+
+        # Create mock config manager
+        config1 = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        config2 = DeviceConfigForTests("dev2", "Device 2", "192.168.1.2")
+        mock_config_manager = MagicMock()
+        mock_config_manager.all.return_value = [config1, config2]
+        driver.config_manager = mock_config_manager
+
+        await driver.register_all_configured_devices()
+
+        # Both devices should be registered
+        assert "dev1" in driver._configured_devices
+        assert "dev2" in driver._configured_devices
+        assert len(driver._configured_devices) == 2
+
+        # Devices should be connected (async_add_configured_device always connects)
+        assert driver._configured_devices["dev1"].is_connected is True
+        assert driver._configured_devices["dev2"].is_connected is True
+
+    @pytest.mark.asyncio
+    async def test_register_all_configured_devices_with_no_config_manager(
+        self, mock_loop, caplog
+    ):
+        """Test that registration logs warning and returns when config_manager is None."""
+        driver = ConcreteDriver(
+            DeviceForTests,
+            [media_player.MediaPlayer],
+            loop=mock_loop,
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+
+        # config_manager is None by default
+        assert driver.config_manager is None
+
+        await driver.register_all_configured_devices()
+
+        # Should log warning
+        assert "Cannot register devices: config_manager is not set" in caplog.text
+
+        # No devices should be registered
+        assert len(driver._configured_devices) == 0
+
+    @pytest.mark.asyncio
+    async def test_register_all_configured_devices_with_connect_parameter(self):
+        """Test that connect parameter is passed through to add_configured_device."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(
+            DeviceForTests,
+            [media_player.MediaPlayer],
+            require_connection_before_registry=False,
+            loop=loop,
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+
+        # Create mock config manager
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        mock_config_manager = MagicMock()
+        mock_config_manager.all.return_value = [config]
+        driver.config_manager = mock_config_manager
+
+        # Register with connect=True
+        await driver.register_all_configured_devices(connect=True)
+
+        # Device should be registered
+        assert "dev1" in driver._configured_devices
+
+        # Give the background connection task time to run
+        await asyncio.sleep(0.05)
+
+        # Wait for pending tasks to complete
+        pending = [
+            t
+            for t in asyncio.all_tasks(loop)
+            if t != asyncio.current_task(loop) and not t.done()
+        ]
+        if pending:
+            await asyncio.wait(pending, timeout=0.1)
+
+        # Device should be connected
+        assert driver._configured_devices["dev1"].is_connected is True
+
+    @pytest.mark.asyncio
+    async def test_register_all_configured_devices_multiple_devices(self, mock_loop):
+        """Test registration of multiple devices from the config manager."""
+        driver = ConcreteDriver(
+            DeviceForTests,
+            [media_player.MediaPlayer],
+            require_connection_before_registry=False,
+            loop=mock_loop,
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+
+        # Create mock config manager with 5 devices
+        configs = [
+            DeviceConfigForTests(f"dev{i}", f"Device {i}", f"192.168.1.{i}")
+            for i in range(1, 6)
+        ]
+        mock_config_manager = MagicMock()
+        mock_config_manager.all.return_value = configs
+        driver.config_manager = mock_config_manager
+
+        await driver.register_all_configured_devices(connect=False)
+
+        # All 5 devices should be registered
+        assert len(driver._configured_devices) == 5
+        for i in range(1, 6):
+            assert f"dev{i}" in driver._configured_devices
+            device = driver._configured_devices[f"dev{i}"]
+            assert device.identifier == f"dev{i}"
+            assert device.name == f"Device {i}"
+
+    @pytest.mark.asyncio
+    async def test_register_all_configured_devices_empty_config_manager(
+        self, mock_loop
+    ):
+        """Test registration with empty config manager registers no devices."""
+        driver = ConcreteDriver(
+            DeviceForTests,
+            [media_player.MediaPlayer],
+            loop=mock_loop,
+        )
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+
+        # Create mock config manager with no devices
+        mock_config_manager = MagicMock()
+        mock_config_manager.all.return_value = []
+        driver.config_manager = mock_config_manager
+
+        await driver.register_all_configured_devices()
+
+        # No devices should be registered
+        assert len(driver._configured_devices) == 0
+
     def test_setup_device_event_handlers(self, driver):
         """Test that event handlers are attached to devices."""
         config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")

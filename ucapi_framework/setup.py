@@ -118,6 +118,10 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             nonlocal setup_flow
 
             if setup_flow is None:
+                if driver.config_manager is None:
+                    raise ValueError(
+                        "Driver's config_manager must be set before creating setup handler"
+                    )
                 _LOG.info("Creating new %s instance", cls.__name__)
                 setup_flow = cls(driver.config_manager, discovery=discovery)
 
