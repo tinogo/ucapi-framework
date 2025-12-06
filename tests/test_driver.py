@@ -153,6 +153,12 @@ class MockEntityCollection:
     def contains(self, entity_id):
         return any(e.id == entity_id for e in self._entities)
 
+    def get(self, entity_id):
+        for e in self._entities:
+            if e.id == entity_id:
+                return e
+        return None
+
     def get_all(self):
         # Return list of dicts matching ucapi Entities.get_all() behavior
         return [
@@ -1991,6 +1997,7 @@ class TestDeviceEventHandlersEntityTypes:
             EntityTypes.REMOTE,
             EntityTypes.SENSOR,
             EntityTypes.SWITCH,
+            EntityTypes.IR_EMITTER,
         ]:
             mock_entity = MagicMock()
             mock_entity.entity_type = entity_type
@@ -2017,6 +2024,7 @@ class TestDeviceEventHandlersEntityTypes:
             EntityTypes.REMOTE,
             EntityTypes.SENSOR,
             EntityTypes.SWITCH,
+            EntityTypes.IR_EMITTER,
         ]:
             mock_entity = MagicMock()
             mock_entity.entity_type = entity_type
@@ -2043,6 +2051,7 @@ class TestDeviceEventHandlersEntityTypes:
             EntityTypes.REMOTE,
             EntityTypes.SENSOR,
             EntityTypes.SWITCH,
+            EntityTypes.IR_EMITTER,
         ]:
             mock_entity = MagicMock()
             mock_entity.entity_type = entity_type
@@ -2215,6 +2224,23 @@ class TestOnDeviceUpdateEntityTypes:
         driver.api.configured_entities.update_attributes.assert_called()
 
     @pytest.mark.asyncio
+    async def test_on_device_update_ir_emitter(self):
+        """Test on_device_update for IR emitter entity."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.IR_EMITTER
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.contains = MagicMock(return_value=True)
+        driver.api.configured_entities.update_attributes = MagicMock()
+
+        await driver.on_device_update("dev1", {"state": "on"})
+
+        driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
     async def test_on_device_update_unknown_entity_type(self, caplog):
         """Test on_device_update with unknown entity type logs warning."""
         import logging
@@ -2248,3 +2274,122 @@ class TestOnDeviceUpdateEntityTypes:
         await driver.on_device_update("dev1", None)
 
         assert "Received None update" in caplog.text
+
+
+class TestDriverCoverageGaps:
+    """Additional tests to fill coverage gaps."""
+
+    def _create_driver(self):
+        """Create a driver for testing."""
+        loop = asyncio.get_event_loop()
+        driver = ConcreteDriver(DeviceForTests, [media_player.MediaPlayer], loop=loop)
+        driver.api = MagicMock()
+        driver.api.configured_entities = MagicMock()
+        driver.api.available_entities = MockEntityCollection()
+        driver.api.set_device_state = AsyncMock()
+        return driver
+
+    @pytest.mark.asyncio
+    async def test_on_device_connected_unknown_device(self, caplog):
+        """Test on_device_connected with unknown device logs warning."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        driver = self._create_driver()
+        # Don't add any device - call on_device_connected with unknown device
+        await driver.on_device_connected("unknown_device")
+
+        assert "Device unknown_device is not configured" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_on_device_update_media_player_clears_media_when_off(self):
+        """Test on_device_update clears media attributes when media player turns OFF."""
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        mock_entity = MagicMock()
+        mock_entity.entity_type = EntityTypes.MEDIA_PLAYER
+        driver.api.configured_entities.get = MagicMock(return_value=mock_entity)
+        driver.api.configured_entities.contains = MagicMock(return_value=True)
+        driver.api.configured_entities.update_attributes = MagicMock()
+
+        # Send update with OFF state
+        await driver.on_device_update("dev1", {"state": "OFF"})
+
+        # Should have cleared media attributes
+        call_args = driver.api.configured_entities.update_attributes.call_args
+        assert call_args is not None
+        attributes = call_args[0][1]
+
+        # Check that media attributes are cleared
+        assert media_player.Attributes.MEDIA_DURATION in attributes
+        assert media_player.Attributes.MEDIA_POSITION in attributes
+        assert media_player.Attributes.MEDIA_TITLE in attributes
+
+    @pytest.mark.asyncio
+    async def test_on_device_update_entity_not_found(self, caplog):
+        """Test on_device_update when entity is not found in configured or available."""
+        import logging
+
+        caplog.set_level(logging.DEBUG)
+
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        driver.add_configured_device(config, connect=False)
+
+        # Entity not found
+        driver.api.configured_entities.get = MagicMock(return_value=None)
+        driver.api.available_entities = MockEntityCollection()  # Empty
+
+        await driver.on_device_update("dev1", {"state": "on"})
+
+        assert "Entity not found" in caplog.text
+
+    def test_entity_type_from_entity_id_no_period(self):
+        """Test entity_type_from_entity_id with entity_id that has no period."""
+        driver = self._create_driver()
+        result = driver.entity_type_from_entity_id("no_period")
+        assert result is None
+
+    def test_entity_type_from_entity_id_empty(self):
+        """Test entity_type_from_entity_id with empty entity_id."""
+        driver = self._create_driver()
+        result = driver.entity_type_from_entity_id("")
+        assert result is None
+
+    def test_device_from_entity_id_no_period(self):
+        """Test device_from_entity_id with entity_id that has no period."""
+        driver = self._create_driver()
+        result = driver.device_from_entity_id("no_period")
+        assert result is None
+
+    def test_device_from_entity_id_empty(self):
+        """Test device_from_entity_id with empty entity_id."""
+        driver = self._create_driver()
+        result = driver.device_from_entity_id("")
+        assert result is None
+
+    def test_sub_device_from_entity_id_no_sub_device(self):
+        """Test sub_device_from_entity_id when no sub-device present."""
+        driver = self._create_driver()
+        result = driver.sub_device_from_entity_id("media_player.dev1")
+        assert result is None
+
+    def test_sub_device_from_entity_id_with_sub_device(self):
+        """Test sub_device_from_entity_id with sub-device."""
+        driver = self._create_driver()
+        result = driver.sub_device_from_entity_id("media_player.dev1.zone2")
+        assert result == "zone2"
+
+    def test_remove_device_not_found(self, caplog):
+        """Test remove_device when device is not found."""
+        import logging
+
+        caplog.set_level(logging.WARNING)
+
+        driver = self._create_driver()
+        driver.remove_device("nonexistent")
+
+        assert "Device nonexistent not found" in caplog.text
