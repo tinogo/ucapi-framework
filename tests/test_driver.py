@@ -767,10 +767,9 @@ class TestBaseIntegrationDriver:
         assert entity_type == "light"
 
     def test_entity_type_from_entity_id_invalid(self, driver):
-        """Test entity_type_from_entity_id with invalid entity ID."""
-        entity_type = driver.entity_type_from_entity_id("invalid")
-
-        assert entity_type is None
+        """Test entity_type_from_entity_id with invalid entity ID raises ValueError."""
+        with pytest.raises(ValueError, match="does not contain the expected separator"):
+            driver.entity_type_from_entity_id("invalid")
 
     def test_entity_type_from_entity_id_none(self, driver):
         """Test entity_type_from_entity_id with None."""
@@ -805,10 +804,9 @@ class TestBaseIntegrationDriver:
         assert sub_device == "zone.outlet_1"
 
     def test_sub_device_from_entity_id_invalid(self, driver):
-        """Test sub_device_from_entity_id with invalid entity ID."""
-        sub_device = driver.sub_device_from_entity_id("invalid")
-
-        assert sub_device is None
+        """Test sub_device_from_entity_id with invalid entity ID raises ValueError."""
+        with pytest.raises(ValueError, match="does not contain the expected separator"):
+            driver.sub_device_from_entity_id("invalid")
 
     def test_sub_device_from_entity_id_none(self, driver):
         """Test sub_device_from_entity_id with None."""
@@ -843,68 +841,14 @@ class TestBaseIntegrationDriver:
 
         # Test invalid formats
         assert driver.device_from_entity_id("") is None
-        assert driver.device_from_entity_id("invalid") is None
+        with pytest.raises(ValueError, match="does not contain the expected separator"):
+            driver.device_from_entity_id("invalid")
         assert driver.device_from_entity_id("only.one") == "one"
-
-    def test_entity_type_from_entity_id_requires_override_when_create_entities_overridden(
-        self, mock_loop
-    ):
-        """Test that overriding create_entities requires overriding entity_type_from_entity_id."""
-
-        class DriverWithCustomEntities(BaseIntegrationDriver):
-            """Driver that overrides create_entities but not entity_type_from_entity_id."""
-
-            def create_entities(self, device_config, device):
-                # Custom entity creation with non-standard ID format
-                return []
-
-            def device_from_entity_id(self, entity_id):
-                return entity_id  # Custom format
-
-            def get_entity_ids_for_device(self, device_id):
-                return [device_id]  # Custom format
-
-        driver = DriverWithCustomEntities(DeviceForTests, [], loop=mock_loop)
-
-        # Should raise NotImplementedError with helpful message
-        with pytest.raises(
-            NotImplementedError,
-            match="create_entities\\(\\) is overridden but entity_type_from_entity_id\\(\\) is not",
-        ):
-            driver.entity_type_from_entity_id("custom_entity_id")
 
     def test_sub_device_from_entity_id_requires_override_when_3_part_format_used(
         self, mock_loop
     ):
-        """Test that overriding create_entities with 3-part format requires overriding sub_device_from_entity_id."""
-
-        class DriverWith3PartEntities(BaseIntegrationDriver):
-            """Driver that overrides create_entities with 3-part format but not sub_device_from_entity_id."""
-
-            def create_entities(self, device_config, device):
-                # Custom entity creation with 3-part format
-                return []
-
-            def entity_type_from_entity_id(self, entity_id):
-                return "light"
-
-            def device_from_entity_id(self, entity_id):
-                return "hub_1"
-
-            def get_entity_ids_for_device(self, device_id):
-                return [f"light.{device_id}.bedroom"]  # 3-part format
-
-        driver = DriverWith3PartEntities(DeviceForTests, [], loop=mock_loop)
-
-        # Should raise NotImplementedError when 3-part format is detected
-        with pytest.raises(
-            NotImplementedError,
-            match="create_entities\\(\\) is overridden and uses 3-part entity IDs.*sub_device_from_entity_id\\(\\) is not",
-        ):
-            driver.sub_device_from_entity_id("light.hub_1.bedroom")
-
-    def test_sub_device_from_entity_id_no_error_for_2_part_format(self, mock_loop):
-        """Test that overriding create_entities with 2-part format doesn't require overriding sub_device_from_entity_id."""
+        """Test that sub_device_from_entity_id works with standard 2-part format."""
 
         class DriverWith2PartEntities(BaseIntegrationDriver):
             """Driver that overrides create_entities with 2-part format."""
@@ -913,44 +857,14 @@ class TestBaseIntegrationDriver:
                 # Custom entity creation with 2-part format (no sub-devices)
                 return []
 
-            def entity_type_from_entity_id(self, entity_id):
-                return "media_player"
-
-            def device_from_entity_id(self, entity_id):
-                return entity_id  # Custom format
-
             def get_entity_ids_for_device(self, device_id):
                 return [f"media_player.{device_id}"]  # 2-part format
 
         driver = DriverWith2PartEntities(DeviceForTests, [], loop=mock_loop)
 
-        # Should NOT raise error for 2-part format
+        # Should work fine with 2-part format (using default separator)
         result = driver.sub_device_from_entity_id("media_player.dev1")
         assert result is None  # 2-part format has no sub-device
-
-    def test_device_from_entity_id_requires_override_when_create_entities_overridden(
-        self, mock_loop
-    ):
-        """Test that overriding create_entities requires overriding device_from_entity_id."""
-
-        class DriverWithCustomEntities(BaseIntegrationDriver):
-            """Driver that overrides create_entities but not device_from_entity_id."""
-
-            def create_entities(self, device_config, device):
-                # Custom entity creation with non-standard ID format
-                return []
-
-            def get_entity_ids_for_device(self, device_id):
-                return [device_id]  # Custom format
-
-        driver = DriverWithCustomEntities(DeviceForTests, [], loop=mock_loop)
-
-        # Should raise NotImplementedError with helpful message
-        with pytest.raises(
-            NotImplementedError,
-            match="create_entities\\(\\) is overridden but device_from_entity_id\\(\\) is not",
-        ):
-            driver.device_from_entity_id("custom_entity_id")
 
     def test_device_from_entity_id_works_when_both_overridden(self, mock_loop):
         """Test that both methods can be overridden together successfully."""
@@ -974,6 +888,54 @@ class TestBaseIntegrationDriver:
         # Should work fine with both overridden
         assert driver.device_from_entity_id("my_device_id") == "my_device_id"
         assert driver.device_from_entity_id("account_123") == "account_123"
+
+    def test_custom_entity_id_separator(self, mock_loop):
+        """Test using a custom entity_id_separator."""
+
+        class DriverWithCustomSeparator(BaseIntegrationDriver):
+            """Driver using underscore as separator."""
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.entity_id_separator = "_"
+
+            def create_entities(self, device_config, device):
+                return []
+
+            def get_entity_ids_for_device(self, device_id):
+                return []
+
+        driver = DriverWithCustomSeparator(DeviceForTests, [], loop=mock_loop)
+
+        # Should parse using underscore separator
+        assert driver.entity_type_from_entity_id("media_player_dev1") == "media"
+        assert driver.device_from_entity_id("media_player_dev1") == "player"
+        assert driver.sub_device_from_entity_id("light_hub1_bedroom") == "bedroom"
+
+    def test_custom_separator_raises_error_for_wrong_format(self, mock_loop):
+        """Test that ValueError is raised when entity_id doesn't contain custom separator."""
+
+        class DriverWithCustomSeparator(BaseIntegrationDriver):
+            """Driver using underscore as separator."""
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.entity_id_separator = "_"
+
+            def create_entities(self, device_config, device):
+                return []
+
+            def get_entity_ids_for_device(self, device_id):
+                return []
+
+        driver = DriverWithCustomSeparator(DeviceForTests, [], loop=mock_loop)
+
+        # Should raise ValueError when period is used instead of underscore
+        # Use an entity_id that has period but no underscore
+        with pytest.raises(
+            ValueError, match="does not contain the expected separator '_'"
+        ):
+            driver.entity_type_from_entity_id("type.dev1")
 
     def test_get_entity_ids_for_device(self, driver):
         """Test getting entity IDs for a device."""
@@ -1940,13 +1902,11 @@ class TestOnSubscribeEntitiesEdgeCases:
 
     @pytest.mark.asyncio
     async def test_on_subscribe_entities_invalid_entity_id(self):
-        """Test on_subscribe_entities with invalid entity ID format."""
+        """Test on_subscribe_entities with invalid entity ID format raises ValueError."""
         driver = self._create_driver()
-        # Entity ID without dots can't be parsed
-        await driver.on_subscribe_entities(["invalid_entity_id"])
-
-        # Should return early without adding any devices
-        assert len(driver._configured_devices) == 0
+        # Entity ID without dots can't be parsed and should raise ValueError
+        with pytest.raises(ValueError, match="does not contain the expected separator"):
+            await driver.on_subscribe_entities(["invalid_entity_id"])
 
     @pytest.mark.asyncio
     async def test_on_subscribe_entities_no_device_config(self):
@@ -2348,10 +2308,10 @@ class TestDriverCoverageGaps:
         assert "Entity not found" in caplog.text
 
     def test_entity_type_from_entity_id_no_period(self):
-        """Test entity_type_from_entity_id with entity_id that has no period."""
+        """Test entity_type_from_entity_id with entity_id that has no period raises ValueError."""
         driver = self._create_driver()
-        result = driver.entity_type_from_entity_id("no_period")
-        assert result is None
+        with pytest.raises(ValueError, match="does not contain the expected separator"):
+            driver.entity_type_from_entity_id("no_period")
 
     def test_entity_type_from_entity_id_empty(self):
         """Test entity_type_from_entity_id with empty entity_id."""
@@ -2360,10 +2320,10 @@ class TestDriverCoverageGaps:
         assert result is None
 
     def test_device_from_entity_id_no_period(self):
-        """Test device_from_entity_id with entity_id that has no period."""
+        """Test device_from_entity_id with entity_id that has no period raises ValueError."""
         driver = self._create_driver()
-        result = driver.device_from_entity_id("no_period")
-        assert result is None
+        with pytest.raises(ValueError, match="does not contain the expected separator"):
+            driver.device_from_entity_id("no_period")
 
     def test_device_from_entity_id_empty(self):
         """Test device_from_entity_id with empty entity_id."""

@@ -149,6 +149,7 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
 
         self._configured_devices: dict[str, DeviceT] = {}
         self._config_manager = None  # Set via config_manager property
+        self.entity_id_separator = "."  # Default separator for entity IDs
         self._setup_event_handlers()
 
     @property
@@ -1296,141 +1297,117 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         """
         Extract entity type from entity identifier.
 
-        DEFAULT IMPLEMENTATION: Parses entity IDs created by create_entity_id().
-        Returns the entity type (first part before the period):
+        DEFAULT IMPLEMENTATION: Parses entity IDs using the configured separator
+        (defaults to "."). Returns the entity type (first part before the separator):
         - "media_player.device_123" → returns "media_player"
         - "light.hub_1.light_bedroom" → returns "light"
 
-        **IMPORTANT**: If you override create_entities() to use a custom entity ID format,
-        you MUST also override this method to match your custom format. The default
-        implementation will detect this and raise an error to prevent bugs.
+        If you use a custom entity ID format that doesn't use the standard separator,
+        either:
+        1. Set `driver.entity_id_separator` to your custom separator, OR
+        2. Override this method to parse your custom format
+
+        Example with custom separator:
+            def __init__(self, ...):
+                super().__init__(...)
+                self.entity_id_separator = "_"  # Use underscore instead of period
 
         Example custom override:
-            def create_entities(self, device_config, device):
-                # Custom format: entity_id IS the device_id
-                return [PSNMediaPlayer(device_config.identifier, ...)]
-
             def entity_type_from_entity_id(self, entity_id: str) -> str | None:
                 # For PSN, all entities are media players
                 return "media_player"
 
         :param entity_id: Entity identifier (e.g., "media_player.device_123")
         :return: Entity type string or None
-        :raises NotImplementedError: If create_entities was overridden but this method wasn't
+        :raises ValueError: If entity_id doesn't contain the expected separator
         """
-        # Check if create_entities was overridden (indicating custom entity ID format)
-        create_entities_overridden = (
-            type(self).create_entities is not BaseIntegrationDriver.create_entities
-        )
+        if not entity_id:
+            return None
 
-        if create_entities_overridden:
-            # User has custom entity creation, they must override this method too
-            entity_type_from_entity_overridden = (
-                type(self).entity_type_from_entity_id
-                is not BaseIntegrationDriver.entity_type_from_entity_id
+        # Check if separator exists in entity_id
+        if self.entity_id_separator not in entity_id:
+            raise ValueError(
+                f"Entity ID '{entity_id}' does not contain the expected separator "
+                f"'{self.entity_id_separator}'. Either your entity IDs are not using the "
+                f"standard format, or you need to set driver.entity_id_separator to match "
+                f"your format, or override entity_type_from_entity_id() to parse your custom format."
             )
 
-            if not entity_type_from_entity_overridden:
-                raise NotImplementedError(
-                    f"{type(self).__name__}.create_entities() is overridden but "
-                    f"entity_type_from_entity_id() is not. When you override create_entities() "
-                    f"with a custom entity ID format, you must also override "
-                    f"entity_type_from_entity_id() to parse your custom format. "
-                )
+        # Split on separator: "entity_type.device_id" or "entity_type.device_id.entity_id"
+        parts = entity_id.split(self.entity_id_separator)
 
-        # Default implementation: parse standard format from create_entity_id()
-        if not entity_id or "." not in entity_id:
-            return None
-
-        # Split on period: "entity_type.device_id" or "entity_type.device_id.entity_id"
-        parts = entity_id.split(".")
-
-        if len(parts) < 1:
-            return None
-
-        # First part is always the entity_type in create_entity_id() format
-        return parts[0]
+        # First part is always the entity_type
+        return parts[0] if parts else None
 
     def device_from_entity_id(self, entity_id: str) -> str | None:
         """
         Extract device identifier from entity identifier.
 
-        DEFAULT IMPLEMENTATION: Parses entity IDs created by create_entity_id().
-        Handles both formats:
+        DEFAULT IMPLEMENTATION: Parses entity IDs using the configured separator
+        (defaults to "."). Handles both formats:
         - Simple: "entity_type.device_id" → returns "device_id"
         - With sub-entity: "entity_type.device_id.entity_id" → returns "device_id"
 
-        **IMPORTANT**: If you override create_entities() to use a custom entity ID format,
-        you MUST also override this method to match your custom format. The default
-        implementation will detect this and raise an error to prevent bugs.
+        If you use a custom entity ID format that doesn't use the standard separator,
+        either:
+        1. Set `driver.entity_id_separator` to your custom separator, OR
+        2. Override this method to parse your custom format
+
+        Example with custom separator:
+            def __init__(self, ...):
+                super().__init__(...)
+                self.entity_id_separator = "_"  # Use underscore instead of period
 
         Example custom override:
-            def create_entities(self, device_config, device):
-                # Custom format: entity_id IS the device_id
-                return [PSNMediaPlayer(device_config.identifier, ...)]
-
             def device_from_entity_id(self, entity_id: str) -> str | None:
                 # For PSN, entity_id IS the device_id
                 return entity_id
 
         :param entity_id: Entity identifier (e.g., "media_player.device_123")
         :return: Device identifier or None
-        :raises NotImplementedError: If create_entities was overridden but this method wasn't
+        :raises ValueError: If entity_id doesn't contain the expected separator
         """
-        # Check if create_entities was overridden (indicating custom entity ID format)
-        create_entities_overridden = (
-            type(self).create_entities is not BaseIntegrationDriver.create_entities
-        )
-
-        if create_entities_overridden:
-            # User has custom entity creation, they must override this method too
-            device_from_entity_overridden = (
-                type(self).device_from_entity_id
-                is not BaseIntegrationDriver.device_from_entity_id
-            )
-
-            if not device_from_entity_overridden:
-                raise NotImplementedError(
-                    f"{type(self).__name__}.create_entities() is overridden but "
-                    f"device_from_entity_id() is not. When you override create_entities() "
-                    f"with a custom entity ID format, you must also override "
-                    f"device_from_entity_id() to parse your custom format. "
-                )
-
-        # Default implementation: parse standard format from create_entity_id()
-        if not entity_id or "." not in entity_id:
+        if not entity_id:
             return None
 
-        # Split on period: "entity_type.device_id" or "entity_type.device_id.entity_id"
-        parts = entity_id.split(".")
+        # Check if separator exists in entity_id
+        if self.entity_id_separator not in entity_id:
+            raise ValueError(
+                f"Entity ID '{entity_id}' does not contain the expected separator "
+                f"'{self.entity_id_separator}'. Either your entity IDs are not using the "
+                f"standard format, or you need to set driver.entity_id_separator to match "
+                f"your format, or override device_from_entity_id() to parse your custom format."
+            )
+
+        # Split on separator: "entity_type.device_id" or "entity_type.device_id.entity_id"
+        parts = entity_id.split(self.entity_id_separator)
 
         if len(parts) < 2:
             return None
 
-        # Second part is always the device_id in create_entity_id() format
+        # Second part is always the device_id
         return parts[1]
 
     def sub_device_from_entity_id(self, entity_id: str) -> str | None:
         """
         Extract sub-device identifier from entity identifier (if present).
 
-        DEFAULT IMPLEMENTATION: Parses entity IDs created by create_entity_id().
-        Returns the sub-device ID (third part) if present, None otherwise:
+        DEFAULT IMPLEMENTATION: Parses entity IDs using the configured separator
+        (defaults to "."). Returns the sub-device ID (third part) if present, None otherwise:
         - Simple: "entity_type.device_id" → returns None (no sub-device)
         - With sub-device: "entity_type.device_id.sub_device_id" → returns "sub_device_id"
 
-        **IMPORTANT**: If you override create_entities() to use a custom entity ID format
-        WITH sub-devices (3-part format), you MUST also override this method. The simple
-        2-part format doesn't require override since it always returns None.
+        If you use a custom entity ID format that doesn't use the standard separator,
+        either:
+        1. Set `driver.entity_id_separator` to your custom separator, OR
+        2. Override this method to parse your custom format
+
+        Example with custom separator:
+            def __init__(self, ...):
+                super().__init__(...)
+                self.entity_id_separator = "_"  # Use underscore instead of period
 
         Example custom override:
-            def create_entities(self, device_config, device):
-                # Custom format with sub-devices
-                return [
-                    Light(f"{device_config.id}_zone1", ...),
-                    Light(f"{device_config.id}_zone2", ...)
-                ]
-
             def sub_device_from_entity_id(self, entity_id: str) -> str | None:
                 # For custom format: "deviceid_zonename"
                 if "_" in entity_id:
@@ -1439,45 +1416,24 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
 
         :param entity_id: Entity identifier (e.g., "light.hub_1.bedroom")
         :return: Sub-device identifier or None
-        :raises NotImplementedError: If create_entities was overridden and uses 3-part format but this method wasn't
+        :raises ValueError: If entity_id doesn't contain the expected separator
         """
-        # Check if create_entities was overridden (indicating custom entity ID format)
-        create_entities_overridden = (
-            type(self).create_entities is not BaseIntegrationDriver.create_entities
-        )
-
-        if create_entities_overridden:
-            # User has custom entity creation, they must override this method too IF they use 3-part format
-            sub_device_from_entity_overridden = (
-                type(self).sub_device_from_entity_id
-                is not BaseIntegrationDriver.sub_device_from_entity_id
-            )
-
-            # Default implementation: parse standard format from create_entity_id()
-            if not entity_id or "." not in entity_id:
-                return None
-
-            # Split on period: "entity_type.device_id" or "entity_type.device_id.sub_device_id"
-            parts = entity_id.split(".")
-
-            # If we have 3 parts and method wasn't overridden, that's an error
-            if len(parts) >= 3 and not sub_device_from_entity_overridden:
-                raise NotImplementedError(
-                    f"{type(self).__name__}.create_entities() is overridden and uses "
-                    f"3-part entity IDs (entity_type.device_id.sub_device_id), but "
-                    f"sub_device_from_entity_id() is not overridden. When you override "
-                    f"create_entities() with a custom 3-part entity ID format, you must "
-                    f"also override sub_device_from_entity_id() to parse your custom format. "
-                )
-
-        # Default implementation: parse standard format from create_entity_id()
-        if not entity_id or "." not in entity_id:
+        if not entity_id:
             return None
 
-        # Split on period: "entity_type.device_id" or "entity_type.device_id.sub_device_id"
-        parts = entity_id.split(".", 2)  # Split into at most 3 parts
+        # Check if separator exists in entity_id
+        if self.entity_id_separator not in entity_id:
+            raise ValueError(
+                f"Entity ID '{entity_id}' does not contain the expected separator "
+                f"'{self.entity_id_separator}'. Either your entity IDs are not using the "
+                f"standard format, or you need to set driver.entity_id_separator to match "
+                f"your format, or override sub_device_from_entity_id() to parse your custom format."
+            )
 
-        # Return everything after the second period if present, None otherwise
+        # Split on separator: "entity_type.device_id" or "entity_type.device_id.sub_device_id"
+        parts = entity_id.split(self.entity_id_separator, 2)  # Split into at most 3 parts
+
+        # Return everything after the second separator if present, None otherwise
         if len(parts) >= 3:
             return parts[2]  # This will be "sub_device_id" or "sub.device.with.dots"
 
