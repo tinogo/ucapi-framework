@@ -1093,9 +1093,7 @@ class TestSetupFlowAdvanced:
         error_field = next((f for f in fields if f.get("id") == "error"), None)
         assert error_field is not None
         # Check that the invalid data is preserved for correction
-        restore_field = next(
-            (f for f in fields if f.get("id") == "restore_data"), None
-        )
+        restore_field = next((f for f in fields if f.get("id") == "restore_data"), None)
         assert restore_field is not None
         assert restore_field["field"]["textarea"]["value"] == "not valid json {"
 
