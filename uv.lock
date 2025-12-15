@@ -1233,21 +1233,21 @@ wheels = [
 
 [[package]]
 name = "ucapi"
-version = "0.3.2"
+version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyee" },
     { name = "websockets" },
     { name = "zeroconf" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/eb/83/8dff2cab7888b88aa4b789d48df5561cca308142c8b33e8bcc6c77fb002b/ucapi-0.3.2.tar.gz", hash = "sha256:9185dc68cb18cf45c5bf0eec1010f1a79c0b6df15a839ac7ede6f3881314bad5", size = 36547, upload-time = "2025-09-17T13:18:22.87Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b6/bc/cb5f6e00fc5205ed534dbe73f6718dcf94e52f8e22fc23840851f1663564/ucapi-0.4.0.tar.gz", hash = "sha256:594c8dec6cdaf51d6ab425fc327db4601777a083ae77225a6b30b57febc5c7b4", size = 36990, upload-time = "2025-11-24T16:39:34.217Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f1/1d/9a875bb213381a712c31ad5499abf49796cf7d2175a851fa250e8afef98b/ucapi-0.3.2-py3-none-any.whl", hash = "sha256:7f09333ebbbc0422a7a578bd35f44884299a0e2267eabec62ea16ffa9216f975", size = 32336, upload-time = "2025-09-17T13:18:22.017Z" },
+    { url = "https://files.pythonhosted.org/packages/21/10/8b27dce95b8aaa6aa3f6d4d525ed6c3ab41e994e0bbcbd4f15f69a3d96de/ucapi-0.4.0-py3-none-any.whl", hash = "sha256:b7a1f19783f4bbb19b44e5b5759642e7e437259ea4fc9f9332208d365745e501", size = 32541, upload-time = "2025-11-24T16:39:33.321Z" },
 ]
 
 [[package]]
 name = "ucapi-framework"
-version = "1.0.0"
+version = "1.2.2"
 source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -1264,13 +1264,14 @@ dev = [
 docs = [
     { name = "mkdocs-material" },
     { name = "mkdocstrings", extra = ["python"] },
+    { name = "mkdocstrings-python" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "pyee", specifier = ">=9.0.0" },
-    { name = "ucapi", specifier = ">=0.3.2" },
+    { name = "ucapi", specifier = ">=0.4.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -1282,6 +1283,7 @@ dev = [
 docs = [
     { name = "mkdocs-material", specifier = ">=9.5.0" },
     { name = "mkdocstrings", extras = ["python"], specifier = ">=0.24.0" },
+    { name = "mkdocstrings-python", specifier = ">=1.0.0" },
 ]
 
 [[package]]

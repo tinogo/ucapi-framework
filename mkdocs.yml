@@ -38,6 +38,9 @@ theme:
   icon:
     repo: fontawesome/brands/github
 
+extra_css:
+  - stylesheets/extra.css
+
 plugins:
   - search
   - mkdocstrings:
@@ -98,6 +101,3 @@ extra:
       link: https://github.com/JackJPowell
     - icon: fontawesome/brands/discord
       link: https://discord.gg/zGVYf58
-  analytics:
-    provider: google
-    property: !ENV GOOGLE_ANALYTICS_KEY
