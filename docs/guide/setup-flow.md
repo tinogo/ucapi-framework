@@ -211,6 +211,125 @@ def get_additional_discovery_fields(self) -> list[dict]:
 
 These additional input values are passed to `prepare_input_from_discovery()`.
 
+## Device Validation Pattern
+
+The framework provides `self.device_class` to enable calling class methods for validation. This keeps validation logic with your device class and allows reuse in the device's `connect()` method.
+
+### Using Class Methods for Validation
+
+Define a class method on your device for validation:
+
+```python
+from ucapi_framework import StatelessHTTPDevice
+import aiohttp
+
+class MyDevice(StatelessHTTPDevice):
+    @classmethod
+    async def validate_connection(cls, host: str, token: str) -> dict:
+        """Validate connection and return device info.
+        
+        This method can be called during setup without creating a device instance.
+        """
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"http://{host}/api/info",
+                headers={"Authorization": f"Bearer {token}"}
+            ) as resp:
+                if resp.status != 200:
+                    raise ConnectionError(f"Connection failed: {resp.status}")
+                return await resp.json()
+    
+    async def connect(self):
+        """Connect to device - can reuse validation logic."""
+        try:
+            info = await self.validate_connection(
+                self._config.host,
+                self._config.token
+            )
+            self._model = info.get("model")
+            self._firmware = info.get("firmware")
+            return True
+        except ConnectionError:
+            return False
+```
+
+Then use it in your setup flow:
+
+```python
+class MySetupFlow(BaseSetupFlow[MyDeviceConfig]):
+    async def query_device(self, input_values: dict):
+        """Validate device using device class method."""
+        try:
+            # self.device_class is available via the framework
+            info = await self.device_class.validate_connection(
+                host=input_values["host"],
+                token=input_values["token"]
+            )
+            
+            return MyDeviceConfig(
+                identifier=info["device_id"],
+                name=info.get("name", input_values["name"]),
+                host=input_values["host"],
+                token=input_values["token"],
+                model=info["model"],
+                firmware=info["firmware"]
+            )
+        except ConnectionError as e:
+            _LOG.error("Connection validation failed: %s", e)
+            return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
+```
+
+**Benefits:**
+
+- ✅ Validation logic stays with device class
+- ✅ Can be reused in `connect()` method
+- ✅ No device instance needed during setup
+- ✅ Type-safe and discoverable
+- ✅ Keeps setup flow clean and focused
+
+### Alternative: Separate API Client
+
+For complex APIs, you can also use a separate API client class:
+
+```python
+class MyAPIClient:
+    """Standalone API client for device communication."""
+    
+    async def get_device_info(self, host: str, token: str) -> dict:
+        """Get device information."""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"http://{host}/api/info") as resp:
+                return await resp.json()
+
+# In device:
+class MyDevice(StatelessHTTPDevice):
+    def __init__(self, config):
+        super().__init__(config)
+        self._client = MyAPIClient()
+    
+    async def connect(self):
+        info = await self._client.get_device_info(
+            self._config.host,
+            self._config.token
+        )
+        return info is not None
+
+# In setup:
+class MySetupFlow(BaseSetupFlow):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._client = MyAPIClient()
+    
+    async def query_device(self, input_values):
+        info = await self._client.get_device_info(
+            input_values["host"],
+            input_values["token"]
+        )
+        return MyDeviceConfig(...)
+```
+
+Both patterns work well - choose based on your preference and API complexity.
+
 ## Multi-Screen Flows
 
 For complex setups requiring multiple screens:

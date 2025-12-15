@@ -69,21 +69,27 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         self,
         config_manager: BaseConfigManager,
         *,
+        driver: BaseIntegrationDriver | None = None,
+        device_class: type | None = None,
         discovery: BaseDiscovery | None = None,
     ):
         """
         Initialize the setup flow.
 
-        Child classes typically don't need to override __init__ - the discovery
-        instance is set automatically by create_handler().
+        Child classes typically don't need to override __init__ - the driver,
+        device_class, and discovery are set automatically by create_handler().
 
         :param config_manager: Device configuration manager instance
+        :param driver: Reference to the driver instance (provides access to driver state)
+        :param device_class: The device class (enables calling class methods for validation)
         :param discovery: Discovery instance for auto-discovery.
                          Pass None if the device does not support discovery.
                          This is typically instantiated in your driver's main() and
                          passed via create_handler().
         """
         self.config = config_manager
+        self.driver = driver
+        self.device_class = device_class
         self.discovery = discovery
         self._setup_step = SetupSteps.INIT
         self._add_mode = False
@@ -125,7 +131,12 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                         "Driver's config_manager must be set before creating setup handler"
                     )
                 _LOG.info("Creating new %s instance", cls.__name__)
-                setup_flow = cls(driver.config_manager, discovery=discovery)
+                setup_flow = cls(
+                    driver.config_manager,
+                    driver=driver,
+                    device_class=driver._device_class,
+                    discovery=discovery,
+                )
 
             return await setup_flow.handle_driver_setup(msg)
 
@@ -892,6 +903,38 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         This method is called after the user provides device information (via manual entry
         or discovery). This is where you typically have enough info to query the device,
         validate connectivity, fetch additional data, or perform authentication.
+
+        **Using Device Class for Validation:**
+        
+        The framework provides `self.device_class` which you can use to call class methods
+        for validation. This keeps validation logic with your device class:
+
+            class MyDevice(StatelessHTTPDevice):
+                @classmethod
+                async def validate_connection(cls, host: str, token: str) -> dict:
+                    '''Validate credentials and return device info.'''
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(f"http://{host}/api/info",
+                                               headers={"Token": token}) as resp:
+                            if resp.status != 200:
+                                raise ConnectionError("Invalid credentials")
+                            return await resp.json()
+
+            # In your setup flow:
+            async def query_device(self, input_values):
+                try:
+                    info = await self.device_class.validate_connection(
+                        host=input_values["host"],
+                        token=input_values["token"]
+                    )
+                    return MyDeviceConfig(
+                        identifier=info["device_id"],
+                        name=info["name"],
+                        host=input_values["host"],
+                        token=input_values["token"]
+                    )
+                except ConnectionError:
+                    return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
 
         Based on the query results, you can:
         - Return a complete device config to finish setup
