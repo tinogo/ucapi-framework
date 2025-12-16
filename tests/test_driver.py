@@ -2353,3 +2353,217 @@ class TestDriverCoverageGaps:
         driver.remove_device("nonexistent")
 
         assert "Device nonexistent not found" in caplog.text
+
+
+class TestCreateEntities:
+    """Tests for create_entities() override pattern."""
+
+    def test_create_entities_default_uses_entity_classes(self, mock_loop):
+        """Test default create_entities instantiates from entity_classes."""
+
+        # Create a custom entity class that accepts (device_config, device)
+        class TestMediaPlayer(media_player.MediaPlayer):
+            def __init__(self, device_config, device):
+                super().__init__(
+                    f"media_player.{device_config.identifier}",
+                    device_config.name,
+                    features=[media_player.Features.ON_OFF],
+                    attributes={
+                        media_player.Attributes.STATE: media_player.States.UNKNOWN
+                    },
+                )
+
+        class MinimalDriver(BaseIntegrationDriver):
+            pass
+
+        # Pass actual entity class
+        driver = MinimalDriver(
+            device_class=DeviceForTests,
+            entity_classes=[TestMediaPlayer],
+            loop=mock_loop,
+        )
+        config = DeviceConfigForTests("test", "Test Device", "192.168.1.1")
+        device = DeviceForTests(config, loop=mock_loop)
+
+        entities = driver.create_entities(config, device)
+        # Should use default: instantiate from entity_classes
+        assert len(entities) == 1
+        assert isinstance(entities[0], media_player.MediaPlayer)
+        assert entities[0].id == "media_player.test"
+
+    def test_create_entities_override_for_multiple_zones(self, mock_loop):
+        """Test overriding create_entities for multiple zones pattern."""
+
+        @dataclass
+        class ZoneConfig:
+            id: str
+            name: str
+
+        @dataclass
+        class MultiZoneConfig:
+            identifier: str
+            name: str
+            address: str
+            zones: list[ZoneConfig]
+
+        class MultiZoneDriver(BaseIntegrationDriver):
+            def create_entities(self, device_config, device):
+                entities = []
+                for zone in device_config.zones:
+                    entities.append(
+                        media_player.MediaPlayer(
+                            f"media_player.{device_config.identifier}_zone_{zone.id}",
+                            f"{device_config.name} {zone.name}",
+                            features=[media_player.Features.ON_OFF],
+                            attributes={
+                                media_player.Attributes.STATE: media_player.States.UNKNOWN
+                            },
+                        )
+                    )
+                return entities
+
+        driver = MultiZoneDriver(
+            device_class=DeviceForTests,
+            entity_classes=EntityTypes.MEDIA_PLAYER,
+            loop=mock_loop,
+        )
+        config = MultiZoneConfig(
+            "receiver",
+            "AV Receiver",
+            "192.168.1.100",
+            [
+                ZoneConfig("1", "Main"),
+                ZoneConfig("2", "Zone 2"),
+                ZoneConfig("3", "Zone 3"),
+            ],
+        )
+        device = DeviceForTests(config, loop=mock_loop)
+
+        entities = driver.create_entities(config, device)
+        assert len(entities) == 3
+        assert entities[0].id == "media_player.receiver_zone_1"
+        assert entities[0].name["en"] == "AV Receiver Main"
+        assert entities[1].id == "media_player.receiver_zone_2"
+        assert entities[2].id == "media_player.receiver_zone_3"
+
+    def test_create_entities_override_hub_discovery(self, mock_loop):
+        """Test overriding create_entities for hub discovery with multiple entity types."""
+        from ucapi import light, cover
+
+        class HubDriver(BaseIntegrationDriver):
+            def create_entities(self, device_config, device):
+                entities = []
+                # Simulate hub discovery
+                entities.append(
+                    light.Light(
+                        f"light.{device_config.identifier}_light1",
+                        "Living Room Light",
+                        features=[light.Features.ON_OFF, light.Features.DIM],
+                        attributes={light.Attributes.STATE: light.States.OFF},
+                    )
+                )
+                entities.append(
+                    light.Light(
+                        f"light.{device_config.identifier}_light2",
+                        "Bedroom Light",
+                        features=[light.Features.ON_OFF],
+                        attributes={light.Attributes.STATE: light.States.OFF},
+                    )
+                )
+                entities.append(
+                    cover.Cover(
+                        f"cover.{device_config.identifier}_cover1",
+                        "Living Room Blinds",
+                        features=[cover.Features.OPEN, cover.Features.CLOSE],
+                        attributes={cover.Attributes.STATE: cover.States.CLOSED},
+                    )
+                )
+                return entities
+
+        driver = HubDriver(
+            device_class=DeviceForTests,
+            entity_classes=[EntityTypes.LIGHT, EntityTypes.COVER],
+            loop=mock_loop,
+        )
+        config = DeviceConfigForTests("hub1", "Smart Hub", "192.168.1.50")
+        device = DeviceForTests(config, loop=mock_loop)
+
+        entities = driver.create_entities(config, device)
+        assert len(entities) == 3
+        assert entities[0].id == "light.hub1_light1"
+        assert entities[1].id == "light.hub1_light2"
+        assert entities[2].id == "cover.hub1_cover1"
+
+    def test_create_entities_conditional_based_on_capabilities(self, mock_loop):
+        """Test conditional entity creation based on device capabilities."""
+        from ucapi import remote
+
+        @dataclass
+        class CapableDeviceConfig:
+            identifier: str
+            name: str
+            address: str
+            supports_playback: bool
+            supports_remote: bool
+
+        class CapableDevice(DeviceForTests):
+            def __init__(self, device_config, loop):
+                super().__init__(device_config, loop)
+                self.supports_playback = device_config.supports_playback
+                self.supports_remote = device_config.supports_remote
+
+        class ConditionalDriver(BaseIntegrationDriver):
+            def create_entities(self, device_config, device):
+                entities = []
+                if device.supports_playback:
+                    entities.append(
+                        media_player.MediaPlayer(
+                            f"media_player.{device_config.identifier}",
+                            device_config.name,
+                            features=[media_player.Features.ON_OFF],
+                            attributes={
+                                media_player.Attributes.STATE: media_player.States.UNKNOWN
+                            },
+                        )
+                    )
+                if device.supports_remote:
+                    entities.append(
+                        remote.Remote(
+                            f"remote.{device_config.identifier}",
+                            device_config.name,
+                            features=[remote.Features.SEND_CMD],
+                            attributes={remote.Attributes.STATE: remote.States.UNKNOWN},
+                        )
+                    )
+                return entities
+
+        driver = ConditionalDriver(
+            device_class=CapableDevice,
+            entity_classes=[EntityTypes.MEDIA_PLAYER, EntityTypes.REMOTE],
+            loop=mock_loop,
+        )
+
+        # Test with both capabilities
+        config_both = CapableDeviceConfig(
+            "test1", "Test Both", "192.168.1.1", True, True
+        )
+        device_both = CapableDevice(config_both, loop=mock_loop)
+        entities = driver.create_entities(config_both, device_both)
+        assert len(entities) == 2
+
+        # Test with only playback
+        config_playback = CapableDeviceConfig(
+            "test2", "Test Playback", "192.168.1.2", True, False
+        )
+        device_playback = CapableDevice(config_playback, loop=mock_loop)
+        entities = driver.create_entities(config_playback, device_playback)
+        assert len(entities) == 1
+        assert entities[0].id == "media_player.test2"
+
+        # Test with neither
+        config_none = CapableDeviceConfig(
+            "test3", "Test None", "192.168.1.3", False, False
+        )
+        device_none = CapableDevice(config_none, loop=mock_loop)
+        entities = driver.create_entities(config_none, device_none)
+        assert len(entities) == 0

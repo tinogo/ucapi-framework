@@ -18,35 +18,110 @@ The driver provides sensible defaults for common patterns. **You typically don't
 
 ### 1. create_entities() ✅ Has Default
 
-**Default behavior**: Creates one entity instance per entity type passed to `__init__`.
+**Default behavior**: Creates one instance per entity class passed to `__init__`, calling: `entity_class(device_config, device)`
 
 ```python
 # Works automatically for standard entity creation
 driver = MyIntegrationDriver(
     device_class=MyDevice,
-    entity_classes=[EntityTypes.MEDIA_PLAYER, EntityTypes.REMOTE]
+    entity_classes=[MyMediaPlayer, MyRemote]
 )
-# Creates MyMediaPlayer and MyRemote automatically
+# Framework automatically calls: MyMediaPlayer(device_config, device), MyRemote(device_config, device)
 ```
 
-**Override only if** you need conditional entity creation:
+**Override when you need**:
+
+- Variable entity counts (e.g., multi-zone receivers)
+- Hub-based discovery
+- Conditional entity creation
+- Custom parameters beyond `(device_config, device)`
+
+#### Example: Multi-Zone Receiver
 
 ```python
-def create_entities(
-    self, device_config: MyDeviceConfig, device: MyDevice
-) -> list[Entity]:
-    """Create entities based on device capabilities."""
-    entities = []
-    
-    # Conditionally create entities
-    if device.supports_playback:
-        entities.append(MyMediaPlayer(device_config, device))
-    
-    # Only create remote if device supports it
-    if device.supports_remote_control:
-        entities.append(MyRemote(device_config, device))
-    
-    return entities
+class AnthemDriver(BaseIntegrationDriver):
+    def create_entities(self, device_config: AnthemConfig, device: AnthemDevice) -> list[Entity]:
+        """Create one media player per configured zone."""
+        entities = []
+        
+        for zone in device_config.zones:
+            entity = AnthemMediaPlayer(
+                entity_id=f"media_player.{device_config.id}_zone_{zone.id}",
+                device=device,
+                device_config=device_config,
+                zone_config=zone,  # Custom parameter!
+            )
+            entities.append(entity)
+        
+        return entities
+```
+
+Your entity class accepts the custom parameters:
+
+```python
+class AnthemMediaPlayer(MediaPlayer):
+    def __init__(
+        self,
+        entity_id: str,
+        device: AnthemDevice,
+        device_config: AnthemConfig,
+        zone_config: ZoneConfig,  # Custom!
+    ):
+        self._device = device
+        self._zone = zone_config
+        
+        super().__init__(
+            entity_id,
+            f"{device_config.name} {zone_config.name}",
+            features=[...],
+            attributes={...},
+        )
+```
+
+#### Example: Hub-Based Discovery
+
+```python
+class LutronDriver(BaseIntegrationDriver):
+    def create_entities(self, device_config: LutronConfig, device: LutronHub) -> list[Entity]:
+        """Discover and create entities from hub."""
+        entities = []
+        
+        # Query hub for available devices
+        for hub_device in device.discover_devices():
+            if hub_device.type == "light":
+                entity = LutronLight(
+                    entity_id=f"light.{device_config.id}_{hub_device.id}",
+                    device=device,
+                    device_config=device_config,
+                    hub_device=hub_device,  # Custom parameter!
+                )
+            elif hub_device.type == "cover":
+                entity = LutronCover(
+                    entity_id=f"cover.{device_config.id}_{hub_device.id}",
+                    device=device,
+                    device_config=device_config,
+                    hub_device=hub_device,  # Custom parameter!
+                )
+            entities.append(entity)
+        
+        return entities
+```
+
+#### Example: Conditional Creation
+
+```python
+class YamahaDriver(BaseIntegrationDriver):
+    def create_entities(self, device_config, device) -> list[Entity]:
+        """Create entities based on device capabilities."""
+        entities = []
+        
+        if device.supports_playback:
+            entities.append(YamahaMediaPlayer(device_config, device))
+        
+        if device.supports_remote:
+            entities.append(YamahaRemote(device_config, device))
+        
+        return entities
 ```
 
 ### 2. map_device_state() ✅ Has Default

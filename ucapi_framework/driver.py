@@ -1194,18 +1194,28 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         """
         Create entity instances for a device.
 
-        DEFAULT IMPLEMENTATION: Creates entities from the entity_classes passed to __init__.
-        Each entity class is instantiated with (device_config, device) as parameters.
+        DEFAULT IMPLEMENTATION: Creates one instance per entity class passed to __init__,
+        calling each as: entity_class(device_config, device)
 
-        The default implementation returns:
-            [EntityClass1(device_config, device), EntityClass2(device_config, device), ...]
-
-        Override this method if you need:
+        This works automatically for simple integrations. Override this method only when you need:
+        - Variable entity counts (e.g., multi-zone receivers)
+        - Hub-based discovery with runtime entity creation
         - Conditional entity creation based on device capabilities
-        - Custom parameters beyond device_config and device
-        - Dynamic entity creation logic
+        - Custom parameters beyond (device_config, device)
 
-        Example override:
+        Example - Multi-zone receiver:
+            def create_entities(self, device_config, device):
+                entities = []
+                for zone in device_config.zones:
+                    entities.append(AnthemMediaPlayer(
+                        entity_id=f"media_player.{device_config.id}_zone_{zone.id}",
+                        device=device,
+                        device_config=device_config,
+                        zone_config=zone  # Custom parameter
+                    ))
+                return entities
+
+        Example - Conditional creation:
             def create_entities(self, device_config, device):
                 entities = []
                 if device.supports_playback:
@@ -1218,6 +1228,7 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         :param device: Device instance
         :return: List of entity instances (MediaPlayer, Remote, etc.)
         """
+        # Default: instantiate from entity_classes
         return [
             entity_class(device_config, device) for entity_class in self._entity_classes
         ]
@@ -1431,7 +1442,9 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
             )
 
         # Split on separator: "entity_type.device_id" or "entity_type.device_id.sub_device_id"
-        parts = entity_id.split(self.entity_id_separator, 2)  # Split into at most 3 parts
+        parts = entity_id.split(
+            self.entity_id_separator, 2
+        )  # Split into at most 3 parts
 
         # Return everything after the second separator if present, None otherwise
         if len(parts) >= 3:
