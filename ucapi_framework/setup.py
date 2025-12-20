@@ -30,6 +30,7 @@ from ucapi_framework.driver import BaseIntegrationDriver
 
 from .discovery import DiscoveredDevice, BaseDiscovery
 from .config import BaseConfigManager
+from .migration import MigrationData
 
 _LOG = logging.getLogger(__name__)
 
@@ -49,6 +50,8 @@ class SetupSteps(IntEnum):
     MANUAL_ENTRY = 6
     BACKUP = 7
     RESTORE = 8
+    MIGRATION_CHECK = 9
+    MIGRATION = 10
 
 
 class BaseSetupFlow(ABC, Generic[ConfigT]):
@@ -72,6 +75,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         driver: BaseIntegrationDriver | None = None,
         device_class: type | None = None,
         discovery: BaseDiscovery | None = None,
+        show_migration_in_ui: bool = False,
     ):
         """
         Initialize the setup flow.
@@ -86,11 +90,14 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                          Pass None if the device does not support discovery.
                          This is typically instantiated in your driver's main() and
                          passed via create_handler().
+        :param show_migration_in_ui: Whether to show migration option in configuration mode.
+                                    Default is False (hidden). Set to True for debugging/testing.
         """
         self.config = config_manager
         self.driver = driver
         self.device_class = device_class
         self.discovery = discovery
+        self.show_migration_in_ui = show_migration_in_ui
         self._setup_step = SetupSteps.INIT
         self._add_mode = False
         self._pending_device_config: ConfigT | None = None  # For multi-screen flows
@@ -228,6 +235,12 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         if self._setup_step == SetupSteps.RESTORE:
             return await self._handle_restore_response(msg)
 
+        if self._setup_step == SetupSteps.MIGRATION_CHECK:
+            return await self._handle_migration_check_response(msg)
+
+        if self._setup_step == SetupSteps.MIGRATION:
+            return await self._handle_migration_response(msg)
+
         _LOG.error("No handler for user input in step: %s", self._setup_step)
         return SetupError()
 
@@ -276,6 +289,14 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                     },
                 ]
             )
+            # Add migration option if explicitly enabled
+            if self.show_migration_in_ui:
+                dropdown_actions.append(
+                    {
+                        "id": "migrate",
+                        "label": {"en": "Migrate Entities"},
+                    }
+                )
         else:
             # Dummy entry if no devices
             dropdown_devices.append({"id": "", "label": {"en": "---"}})
@@ -377,6 +398,9 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
 
             case "restore":
                 return await self._handle_restore()
+
+            case "migrate":
+                return await self._handle_migration(msg)
 
             case _:
                 _LOG.error("Invalid configuration action: %s", action)
@@ -856,6 +880,215 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             return await self._build_restore_screen_with_error(
                 f"Failed to restore configuration: {str(err)}", restore_data
             )
+
+    async def _handle_migration(self, msg: UserDataResponse | None = None) -> RequestUserInput | SetupComplete | SetupError:
+        """
+        Handle migration request.
+
+        Supports two flows:
+        1. Direct check (manager provides previous_version in initial call)
+        2. UI flow (shows form to collect version, for testing/debugging)
+
+        :param msg: Optional UserDataResponse with previous_version for direct check
+        :return: Setup action
+        """
+        # Check if this is a migration execution request (has both versions) - check this FIRST
+        if msg and "current_version" in msg.input_values and "previous_version" in msg.input_values:
+            # Direct flow: perform migration immediately
+            _LOG.info("Starting migration execution (direct)")
+            self._setup_step = SetupSteps.MIGRATION
+            return await self._handle_migration_response(msg)
+        
+        # Check if manager provided just previous_version (migration check only)
+        if msg and "previous_version" in msg.input_values:
+            # Direct flow: perform check immediately
+            _LOG.info("Starting migration check (direct)")
+            self._setup_step = SetupSteps.MIGRATION_CHECK
+            return await self._handle_migration_check_response(msg)
+
+        # UI flow: show form to collect version
+        _LOG.info("Starting migration check (UI flow)")
+        self._setup_step = SetupSteps.MIGRATION_CHECK
+
+        return RequestUserInput(
+            {"en": "Check Migration Requirement"},
+            [
+                {
+                    "id": "info",
+                    "label": {"en": "Migration Check"},
+                    "field": {
+                        "label": {
+                            "value": {
+                                "en": "Provide the previous integration version to check if migration is required."
+                            }
+                        }
+                    },
+                },
+                {
+                    "id": "previous_version",
+                    "label": {"en": "Previous Version"},
+                    "field": {"text": {"value": ""}},
+                },
+            ],
+        )
+
+    async def _handle_migration_check_response(
+        self, msg: UserDataResponse
+    ) -> RequestUserInput | SetupComplete:
+        """
+        Handle migration check response.
+
+        Calls is_migration_required() and returns a screen with the result
+        that the manager can read via GET request.
+
+        For UI flow: if migration is needed, prompts for current_version to proceed.
+        For manager flow: returns result immediately.
+
+        :param msg: User data response containing previous_version
+        :return: RequestUserInput with migration_required field or next step
+        """
+        previous_version = msg.input_values.get("previous_version", "").strip()
+
+        if not previous_version:
+            _LOG.warning("No previous version provided")
+            migration_required = False
+        else:
+            # Call the overridable method
+            migration_required = await self.is_migration_required(previous_version)
+
+        _LOG.info(
+            "Migration check: previous_version=%s, required=%s",
+            previous_version,
+            migration_required,
+        )
+
+        # If this is a UI flow (user clicked through) and migration is required,
+        # show the migration execution form
+        if migration_required and self.show_migration_in_ui:
+            _LOG.info("Migration required, showing execution form")
+            self._setup_step = SetupSteps.MIGRATION
+            return RequestUserInput(
+                {"en": "Perform Migration"},
+                [
+                    {
+                        "id": "info",
+                        "label": {"en": "Migration Required"},
+                        "field": {
+                            "label": {
+                                "value": {
+                                    "en": f"Migration is required from version {previous_version}. "
+                                    f"Provide the current version to perform the migration."
+                                }
+                            }
+                        },
+                    },
+                    {
+                        "id": "previous_version",
+                        "label": {"en": "Previous Version"},
+                        "field": {"text": {"value": previous_version}},
+                    },
+                    {
+                        "id": "current_version",
+                        "label": {"en": "Current Version"},
+                        "field": {"text": {"value": ""}},
+                    },
+                ],
+            )
+
+        # Return a screen with the result that manager can read
+        # The manager will look for the migration_required field value
+        return RequestUserInput(
+            {"en": "Migration Check Result"},
+            [
+                {
+                    "id": "migration_required",
+                    "label": {"en": "Migration Required"},
+                    "field": {"checkbox": {"value": migration_required}},
+                },
+                {
+                    "id": "info",
+                    "label": {"en": "Result"},
+                    "field": {
+                        "label": {
+                            "value": {
+                                "en": f"Migration {'is' if migration_required else 'is not'} required for upgrade from {previous_version}"
+                            }
+                        }
+                    },
+                },
+            ],
+        )
+
+    async def _handle_migration_response(
+        self, msg: UserDataResponse
+    ) -> RequestUserInput | SetupComplete | SetupError:
+        """
+        Handle migration execution request.
+
+        Expects previous_version and current_version, calls perform_migration(),
+        and returns the migration data for the manager to process.
+
+        :param msg: User data response containing version info
+        :return: RequestUserInput with migration results or SetupComplete
+        """
+        previous_version = msg.input_values.get("previous_version", "").strip()
+        current_version = msg.input_values.get("current_version", "").strip()
+
+        if not previous_version or not current_version:
+            _LOG.error(
+                "Missing version information for migration: previous=%s, current=%s",
+                previous_version,
+                current_version,
+            )
+            return SetupError(error_type=IntegrationSetupError.OTHER)
+
+        _LOG.info(
+            "Performing migration: %s -> %s", previous_version, current_version
+        )
+
+        try:
+            # Call the overridable method that returns migration data
+            migration_data = await self.perform_migration(previous_version, current_version)
+
+            # Convert migration data to JSON for display
+            migration_json = json.dumps(migration_data, indent=2)
+
+            entity_count = len(migration_data.get("entity_mappings", []))
+            _LOG.info(
+                "Migration completed: %d entity mappings, driver %s -> %s",
+                entity_count,
+                migration_data.get("previous_driver_id"),
+                migration_data.get("new_driver_id"),
+            )
+
+            # Return the migration data in a format the manager can read
+            return RequestUserInput(
+                {"en": "Migration Complete"},
+                [
+                    {
+                        "id": "migration_data",
+                        "label": {"en": "Migration Data (JSON)"},
+                        "field": {"textarea": {"value": migration_json}},
+                    },
+                    {
+                        "id": "info",
+                        "label": {"en": "Migration Info"},
+                        "field": {
+                            "label": {
+                                "value": {
+                                    "en": f"Migration from {previous_version} to {current_version} completed successfully.\n"
+                                    f"Driver: {migration_data.get('previous_driver_id')} → {migration_data.get('new_driver_id')}\n"
+                                    f"Entity mappings: {entity_count}"
+                                }
+                            }
+                        },
+                    },
+                ],
+            )
+
+        except Exception as err:  # pylint: disable=broad-except
+            _LOG.error("Migration error: %s", err)
+            return SetupError(error_type=IntegrationSetupError.OTHER)
 
     def _auto_populate_config(self, input_values: dict[str, Any]) -> None:
         """
@@ -1584,3 +1817,140 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             "Otherwise, continue with the setup process to add a new device. "
             "Once configured, you can create a backup from the integration settings screen by running the Setup again."
         )
+
+    async def is_migration_required(self, previous_version: str) -> bool:
+        """
+        Check if migration is required when upgrading from a previous version.
+
+        This method is called by the integration manager during the upgrade process
+        to determine if entity migration is needed. The manager will:
+        1. Call this method with the previous integration version
+        2. Read the response to determine if migration is needed
+        3. If True, trigger the migration flow after upgrade completes
+
+        Override this method to implement version-specific migration detection.
+        The default implementation always returns False (no migration needed).
+
+        :param previous_version: The previous integration version (e.g., "1.2.3")
+        :return: True if migration is required, False otherwise
+
+        Example - Simple version check:
+            async def is_migration_required(self, previous_version: str) -> bool:
+                # Migration needed for upgrades from v1.x to v2.x
+                return previous_version.startswith("1.")
+
+        Example - Specific version ranges:
+            async def is_migration_required(self, previous_version: str) -> bool:
+                from packaging import version
+                prev = version.parse(previous_version)
+                # Migration needed for versions below 2.0.0
+                return prev < version.parse("2.0.0")
+
+        Example - Configuration-based check:
+            async def is_migration_required(self, previous_version: str) -> bool:
+                # Check if config manager indicates migration is needed
+                return self.config.migration_required()
+        """
+        _ = previous_version  # Mark as intentionally unused
+        return False
+
+    async def perform_migration(
+        self, previous_version: str, current_version: str
+    ) -> MigrationData:
+        """
+        Perform migration and return entity name mappings.
+
+        This method is called by the integration manager after an upgrade when
+        is_migration_required() returned True. It should return a list of entity
+        name mappings that the manager will use to update entity references.
+
+        The manager will handle:
+        - Updating entity IDs in the Remote's configuration
+        - Updating button/page mappings
+        - Preserving user customizations
+
+        Return format:
+        {
+            "previous_driver_id": "mydriver_v1",
+            "new_driver_id": "mydriver_v2",
+            "entity_mappings": [
+                {"previous_entity_id": "media_player.tv", "new_entity_id": "player.tv"},
+                {"previous_entity_id": "light.bedroom", "new_entity_id": "light.bed"},
+            ]
+        }
+
+        :param previous_version: The previous integration version
+        :param current_version: The current integration version
+        :return: MigrationData dictionary with driver IDs and entity mappings
+
+        Example - Simple entity rename:
+            async def perform_migration(self, previous_version, current_version):
+                from .migration import EntityMigrationMapping
+                
+                mappings: list[EntityMigrationMapping] = []
+                
+                # Load all device configs
+                for device in self.config.all():
+                    # Old naming: {device_id}_player
+                    # New naming: {device_id}.player
+                    mappings.append({
+                        "previous_entity_id": f"{device.identifier}_player",
+                        "new_entity_id": f"{device.identifier}.player"
+                    })
+                
+                return {
+                    "previous_driver_id": "mydriver_v1",
+                    "new_driver_id": "mydriver_v2",
+                    "entity_mappings": mappings
+                }
+
+        Example - Using device class methods:
+            async def perform_migration(self, previous_version, current_version):
+                from .migration import EntityMigrationMapping
+                
+                mappings: list[EntityMigrationMapping] = []
+                
+                for device in self.config.all():
+                    # Use class method to generate entity IDs
+                    old_entities = self.device_class.get_v1_entity_ids(device)
+                    new_entities = self.device_class.get_v2_entity_ids(device)
+                    
+                    for old, new in zip(old_entities, new_entities):
+                        if old != new:
+                            mappings.append({
+                                "previous_entity_id": old,
+                                "new_entity_id": new
+                            })
+                
+                return {
+                    "previous_driver_id": self.get_driver_id(previous_version),
+                    "new_driver_id": self.get_driver_id(current_version),
+                    "entity_mappings": mappings
+                }
+
+        Example - With migration logging:
+            async def perform_migration(self, previous_version, current_version):
+                from .migration import EntityMigrationMapping
+                
+                _LOG.info("Migrating from %s to %s", previous_version, current_version)
+                mappings: list[EntityMigrationMapping] = []
+                
+                for device in self.config.all():
+                    device_mappings = self._migrate_device_entities(device)
+                    mappings.extend(device_mappings)
+                    _LOG.debug("Migrated %d entities for %s", 
+                              len(device_mappings), device.name)
+                
+                return {
+                    "previous_driver_id": "myintegration",
+                    "new_driver_id": "myintegration",  # Driver ID unchanged
+                    "entity_mappings": mappings
+                }
+        """
+        _ = previous_version  # Mark as intentionally unused
+        _ = current_version
+        return {
+            "previous_driver_id": "",
+            "new_driver_id": "",
+            "entity_mappings": []
+        }

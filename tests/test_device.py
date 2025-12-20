@@ -536,39 +536,6 @@ class TestStatelessHTTPDevice:
         assert device._is_connected is False
         assert len(events_emitted) == 1
 
-    @pytest.mark.asyncio
-    @pytest.mark.asyncio
-    @pytest.mark.skip(
-        reason="Complex async context manager mocking - implementation verified manually"
-    )
-    async def test_http_request(self, mock_device_config, event_loop):
-        """Test HTTP request method."""
-        device = ConcreteStatelessHTTPDevice(mock_device_config, loop=event_loop)
-
-        mock_response = AsyncMock()
-        mock_response.raise_for_status = Mock()
-        mock_response.status = 200
-
-        with patch("aiohttp.ClientSession") as mock_session_class:
-            mock_session = AsyncMock()
-            mock_session.__aenter__.return_value = mock_session
-            mock_session.__aexit__.return_value = AsyncMock()
-
-            # Create a proper async context manager for the request
-            mock_request_ctx = AsyncMock()
-            mock_request_ctx.__aenter__.return_value = mock_response
-            mock_request_ctx.__aexit__.return_value = AsyncMock()
-            mock_session.request.return_value = mock_request_ctx
-
-            mock_session_class.return_value = mock_session
-
-            # Just verify the request completes without error
-            # Note: The response object can't be tested directly since it's used within a context manager
-            mock_session.request.assert_not_called()  # Before call
-            await device._http_request("GET", "http://test.com")
-            mock_session.request.assert_called_once_with("GET", "http://test.com")
-            mock_response.raise_for_status.assert_called_once()
-
 
 class TestPollingDevice:
     """Tests for PollingDevice."""
@@ -1000,32 +967,6 @@ class TestPersistentConnectionDevice:
         await device.disconnect()
 
         assert device.connection_closed is True
-
-    @pytest.mark.asyncio
-    @pytest.mark.skip(reason="Timing-sensitive test - reconnection backoff varies")
-    async def test_reconnection_with_backoff(self, mock_device_config, event_loop):
-        """Test reconnection with exponential backoff."""
-
-        class FailingDevice(ConcretePersistentConnectionDevice):
-            def __init__(self, *args, **kwargs):
-                super().__init__(*args, **kwargs)
-                self.connection_attempts = 0
-
-            async def establish_connection(self):
-                self.connection_attempts += 1
-                if self.connection_attempts < 3:
-                    raise Exception("Connection failed")
-                return await super().establish_connection()
-
-        device = FailingDevice(mock_device_config, loop=event_loop, backoff_max=1)
-
-        await device.connect()
-        await asyncio.sleep(1.5)  # Wait for reconnection attempts with backoff
-
-        # Should have made multiple connection attempts
-        assert device.connection_attempts >= 2
-
-        await device.disconnect()
 
     @pytest.mark.asyncio
     async def test_maintain_connection_called(self, mock_device_config, event_loop):

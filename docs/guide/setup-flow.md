@@ -373,6 +373,241 @@ Backup and restore are automatically handled by the framework. Users can:
 - **Export** configuration as JSON
 - **Import** configuration from JSON
 
+## Entity ID Migration
+
+When you release a new version of your integration that changes entity ID formats, you can implement migration support to automatically update entity references in the Remote's activities, button mappings, and UI pages.
+
+### When to Use Migration
+
+Implement migration when:
+
+- **Entity ID format changes** - You switch from one naming scheme to another (e.g., `media_player.device` → `player.device`)
+- **Entity type renames** - Your entity types are renamed (e.g., `av_receiver` → `media_player`)
+- **Driver ID changes** - Your integration's driver ID changes between versions
+
+### Implementing Migration
+
+To enable migration, implement two methods in your setup flow:
+
+#### 1. is_migration_required()
+
+Check if migration is needed based on the previous version:
+
+```python
+async def is_migration_required(self, previous_version: str) -> bool:
+    """Check if migration is needed from the previous version."""
+    # Parse version and determine if migration is needed
+    # For example, migration needed from v1.x to v2.x
+    if previous_version.startswith("1."):
+        return True
+    return False
+```
+
+#### 2. perform_migration()
+
+Generate the entity ID mappings:
+
+```python
+async def perform_migration(
+    self, previous_version: str, current_version: str
+) -> MigrationData:
+    """Generate entity ID mappings for migration.
+    
+    Returns:
+        MigrationData with driver IDs and entity mappings
+    """
+    from ucapi_framework.migration import MigrationData, EntityMigrationMapping
+    
+    mappings: list[EntityMigrationMapping] = []
+    
+    # Iterate through all configured devices
+    for device in self.config.all():
+        # Example: Old format was "media_player.{device_id}"
+        # New format is "player.{device_id}"
+        mappings.append({
+            "previous_entity_id": f"media_player.{device.identifier}",
+            "new_entity_id": f"player.{device.identifier}"
+        })
+        
+        # Example: Light entity rename
+        mappings.append({
+            "previous_entity_id": f"light.{device.identifier}",
+            "new_entity_id": f"light.{device.identifier}_main"
+        })
+    
+    return {
+        "previous_driver_id": "myintegration_v1",
+        "new_driver_id": "myintegration_v2",
+        "entity_mappings": mappings
+    }
+```
+
+### Migration Data Format
+
+The `MigrationData` dictionary has three fields:
+
+```python
+{
+    "previous_driver_id": str,  # Old driver ID (without .main suffix)
+    "new_driver_id": str,       # New driver ID (without .main suffix)
+    "entity_mappings": [        # List of entity ID changes
+        {
+            "previous_entity_id": str,  # Old entity ID (without driver prefix)
+            "new_entity_id": str        # New entity ID (without driver prefix)
+        }
+    ]
+}
+```
+
+**Important Notes:**
+
+- **Driver IDs**: Specify WITHOUT the `.main` suffix. The framework automatically appends `.main` to create the integration_id used by the Remote API.
+- **Entity IDs**: Specify WITHOUT the driver_id/integration_id prefix. Just the entity type and device identifier (e.g., `"media_player.tv"`, not `"mydriver.main.media_player.tv"`).
+- **Full Entity IDs**: The Remote uses the format `integration_id.entity_id` where `integration_id = driver_id + ".main"`.
+
+### Migration Example: Version Upgrade
+
+Here's a complete example for migrating from v1.x to v2.x:
+
+```python
+from ucapi_framework import BaseSetupFlow
+from ucapi_framework.migration import MigrationData
+
+class MySetupFlow(BaseSetupFlow[MyDeviceConfig]):
+    
+    async def is_migration_required(self, previous_version: str) -> bool:
+        """Migration needed from v1.x to v2.x."""
+        try:
+            major_version = int(previous_version.split(".")[0])
+            return major_version < 2
+        except (ValueError, IndexError):
+            return False
+    
+    async def perform_migration(
+        self, previous_version: str, current_version: str
+    ) -> MigrationData:
+        """Migrate entity IDs from v1 to v2 format."""
+        from ucapi_framework.migration import EntityMigrationMapping
+        
+        _LOG.info("Migrating from %s to %s", previous_version, current_version)
+        
+        mappings: list[EntityMigrationMapping] = []
+        
+        for device in self.config.all():
+            # V1 used underscore separator, V2 uses dot separator
+            device_id = device.identifier
+            
+            # Map old media_player entities
+            mappings.append({
+                "previous_entity_id": f"media_player_{device_id}",
+                "new_entity_id": f"media_player.{device_id}"
+            })
+            
+            # Map old light entities
+            if device.has_lights:
+                mappings.append({
+                    "previous_entity_id": f"light_{device_id}",
+                    "new_entity_id": f"light.{device_id}"
+                })
+            
+            _LOG.debug("Created %d mappings for device %s", 2, device.name)
+        
+        return {
+            "previous_driver_id": "myintegration",  # Same driver ID
+            "new_driver_id": "myintegration",       # Just entity format changed
+            "entity_mappings": mappings
+        }
+```
+
+### Migration with Driver ID Changes
+
+If your driver ID changes between versions:
+
+```python
+async def perform_migration(
+    self, previous_version: str, current_version: str
+) -> MigrationData:
+    """Migrate with driver ID change."""
+    mappings = []
+    
+    for device in self.config.all():
+        # Entity IDs stay the same, but driver changed
+        mappings.append({
+            "previous_entity_id": f"media_player.{device.identifier}",
+            "new_entity_id": f"media_player.{device.identifier}"  # Same!
+        })
+    
+    return {
+        "previous_driver_id": "old_integration_name",
+        "new_driver_id": "new_integration_name",
+        "entity_mappings": mappings
+    }
+```
+
+### Using migrate_entities_on_remote()
+
+For advanced use cases, you can programmatically trigger migration on the Remote:
+
+```python
+from ucapi_framework.migration import migrate_entities_on_remote
+
+# In your integration code
+migration_data = await setup_flow.perform_migration("1.0.0", "2.0.0")
+
+success = await migrate_entities_on_remote(
+    remote_url="http://192.168.1.100",
+    migration_data=migration_data,
+    pin="1234"  # or api_key="your-api-key"
+)
+
+if success:
+    _LOG.info("Migration completed successfully")
+else:
+    _LOG.error("Migration failed")
+```
+
+This function:
+
+1. Fetches all activities from the Remote
+2. Filters activities using entities from the old integration
+3. Replaces entity IDs in all locations (included_entities, button_mapping, UI pages, sequences)
+4. Updates each activity via the Remote API
+
+### Testing Migration
+
+Test your migration logic thoroughly:
+
+```python
+async def test_migration():
+    """Test migration mappings."""
+    setup_flow = MySetupFlow(config_manager)
+    
+    # Check if migration is required
+    assert await setup_flow.is_migration_required("1.5.0") is True
+    assert await setup_flow.is_migration_required("2.0.0") is False
+    
+    # Test migration data
+    migration_data = await setup_flow.perform_migration("1.5.0", "2.0.0")
+    
+    assert migration_data["previous_driver_id"] == "myintegration"
+    assert migration_data["new_driver_id"] == "myintegration"
+    assert len(migration_data["entity_mappings"]) > 0
+    
+    # Verify specific mappings
+    first_mapping = migration_data["entity_mappings"][0]
+    assert first_mapping["previous_entity_id"] == "media_player_device1"
+    assert first_mapping["new_entity_id"] == "media_player.device1"
+```
+
+### Migration Best Practices
+
+1. **Test thoroughly**: Migration affects user configurations - test all entity ID changes
+2. **Log clearly**: Use logging to track migration progress and issues
+3. **Document changes**: Inform users about entity ID changes in release notes
+4. **Version check**: Only require migration for versions that actually changed entity formats
+5. **Handle edge cases**: Consider devices with special characters, multiple zones, etc.
+6. **Preserve functionality**: Ensure migrated entities work correctly after migration
+
 ## Complete Example
 
 See the [API Reference](../api/setup.md) for complete documentation of all methods and extension points.

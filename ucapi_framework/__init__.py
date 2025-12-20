@@ -39,6 +39,12 @@ from .discovery import (
     SDDPDiscovery,
     SSDPDiscovery,
 )
+from .migration import (
+    EntityMigrationMapping,
+    MigrationData,
+    migrate_entities_on_remote,
+    verify_migration,
+)
 
 __all__ = [
     "BaseIntegrationDriver",
@@ -60,6 +66,10 @@ __all__ = [
     "NetworkScanDiscovery",
     "SDDPDiscovery",
     "SSDPDiscovery",
+    "EntityMigrationMapping",
+    "MigrationData",
+    "migrate_entities_on_remote",
+    "verify_migration",
     "create_entity_id",
 ]
 

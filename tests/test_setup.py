@@ -1767,3 +1767,161 @@ class TestAdditionalConfigurationReturnTypes:
         assert config_manager.contains("test-device-2")
         device = config_manager.get("test-device-2")
         assert device.port == 7070
+
+
+class TestMigrationMethods:
+    """Test migration-related methods in BaseSetupFlow."""
+
+    async def test_is_migration_required_default_returns_false(self, config_manager):
+        """Test that default implementation of is_migration_required returns False."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+        result = await setup_flow.is_migration_required("1.0.0")
+        assert result is False
+
+    async def test_perform_migration_default_returns_empty(self, config_manager):
+        """Test that default implementation of perform_migration returns empty data."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+        result = await setup_flow.perform_migration("1.0.0", "2.0.0")
+
+        assert result["previous_driver_id"] == ""
+        assert result["new_driver_id"] == ""
+        assert result["entity_mappings"] == []
+
+    async def test_handle_migration_response_with_data(self, config_manager):
+        """Test that _handle_migration_response creates proper output with migration data."""
+
+        class FlowWithMigration(ConcreteSetupFlow):
+            """Flow that has migration logic."""
+
+            async def perform_migration(self, previous_version, current_version):
+                return {
+                    "previous_driver_id": "old_driver",
+                    "new_driver_id": "new_driver",
+                    "entity_mappings": [
+                        {
+                            "previous_entity_id": "media_player.tv",
+                            "new_entity_id": "player.tv",
+                        }
+                    ],
+                }
+
+        setup_flow = FlowWithMigration(config_manager)
+
+        # Simulate migration request
+        msg = UserDataResponse(
+            input_values={"previous_version": "1.0.0", "current_version": "2.0.0"}
+        )
+        result = await setup_flow._handle_migration_response(msg)
+
+        # Should return RequestUserInput with migration data
+        assert isinstance(result, RequestUserInput)
+        assert len(result.settings) == 2
+
+        # Check migration_data field contains JSON
+        migration_field = result.settings[0]
+        assert migration_field["id"] == "migration_data"
+        migration_json = migration_field["field"]["textarea"]["value"]
+        migration_data = json.loads(migration_json)
+        assert migration_data["previous_driver_id"] == "old_driver"
+        assert migration_data["new_driver_id"] == "new_driver"
+
+    async def test_handle_migration_response_missing_version(self, config_manager):
+        """Test that _handle_migration_response returns error when version info is missing."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+
+        # Missing previous_version
+        msg = UserDataResponse(input_values={"current_version": "2.0.0"})
+        result = await setup_flow._handle_migration_response(msg)
+        assert isinstance(result, SetupError)
+
+        # Missing current_version
+        msg = UserDataResponse(input_values={"previous_version": "1.0.0"})
+        result = await setup_flow._handle_migration_response(msg)
+        assert isinstance(result, SetupError)
+
+
+class TestAutoPopulateConfig:
+    """Test _auto_populate_config method."""
+
+    async def test_auto_populate_matching_fields(self, config_manager):
+        """Test that _auto_populate_config sets matching attributes."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+
+        # Create pending config
+        setup_flow._pending_device_config = DeviceConfigForTests(
+            identifier="dev1", name="Device 1", address="", port=8080
+        )
+
+        # Auto-populate with input values
+        input_values = {"address": "192.168.1.100", "port": 9090}
+        setup_flow._auto_populate_config(input_values)
+
+        # Check populated fields
+        assert setup_flow._pending_device_config.address == "192.168.1.100"
+        assert setup_flow._pending_device_config.port == 9090
+
+        # Original fields unchanged
+        assert setup_flow._pending_device_config.identifier == "dev1"
+        assert setup_flow._pending_device_config.name == "Device 1"
+
+    async def test_auto_populate_skips_none_values(self, config_manager):
+        """Test that None values are skipped during auto-population."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+
+        setup_flow._pending_device_config = DeviceConfigForTests(
+            identifier="dev1", name="Device 1", address="192.168.1.1", port=8080
+        )
+
+        # Try to populate with None value
+        input_values = {"address": None, "port": None}
+        setup_flow._auto_populate_config(input_values)
+
+        # Values should remain unchanged
+        assert setup_flow._pending_device_config.address == "192.168.1.1"
+        assert setup_flow._pending_device_config.port == 8080
+
+    async def test_auto_populate_skips_internal_fields(self, config_manager):
+        """Test that fields starting with _ are skipped."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+
+        setup_flow._pending_device_config = DeviceConfigForTests(
+            identifier="dev1", name="Device 1", address="192.168.1.1", port=8080
+        )
+
+        # Try to set internal fields (should be ignored)
+        input_values = {"_internal": "value", "__private": "value"}
+        setup_flow._auto_populate_config(input_values)
+
+        # Should not raise an error
+        assert setup_flow._pending_device_config.identifier == "dev1"
+
+    async def test_auto_populate_handles_none_pending_config(self, config_manager):
+        """Test that method handles None pending config gracefully."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+        setup_flow._pending_device_config = None
+
+        # Should not raise an error
+        setup_flow._auto_populate_config({"field": "value"})
+
+        # Pending config should still be None
+        assert setup_flow._pending_device_config is None
+
+    async def test_auto_populate_ignores_nonexistent_fields(self, config_manager):
+        """Test that fields not in config are ignored."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+
+        setup_flow._pending_device_config = DeviceConfigForTests(
+            identifier="dev1", name="Device 1", address="192.168.1.1", port=8080
+        )
+
+        # Include non-existent fields
+        input_values = {
+            "address": "192.168.1.100",
+            "unknown_field": "should_be_ignored",
+            "another_unknown": 123,
+        }
+        setup_flow._auto_populate_config(input_values)
+
+        # Only address should change
+        assert setup_flow._pending_device_config.address == "192.168.1.100"
+        assert setup_flow._pending_device_config.port == 8080
