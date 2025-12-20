@@ -76,6 +76,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         device_class: type | None = None,
         discovery: BaseDiscovery | None = None,
         show_migration_in_ui: bool = False,
+        migration_testing_mode: bool = True,
     ):
         """
         Initialize the setup flow.
@@ -92,12 +93,16 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                          passed via create_handler().
         :param show_migration_in_ui: Whether to show migration option in configuration mode.
                                     Default is False (hidden). Set to True for debugging/testing.
+        :param migration_testing_mode: If True, migration executes all logic but skips PATCH calls.
+                                       **TEMPORARY PARAMETER - Will be removed before final release**
+                                       Default is False.
         """
         self.config = config_manager
         self.driver = driver
         self.device_class = device_class
         self.discovery = discovery
         self.show_migration_in_ui = show_migration_in_ui
+        self.migration_testing_mode = migration_testing_mode
         self._setup_step = SetupSteps.INIT
         self._add_mode = False
         self._pending_device_config: ConfigT | None = None  # For multi-screen flows
@@ -1184,7 +1189,10 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             # Perform the migration on the Remote
             _LOG.info("Executing migration on Remote at %s", remote_url)
             success = await migrate_entities_on_remote(
-                remote_url=remote_url, migration_data=migration_data, pin=pin
+                remote_url=remote_url,
+                migration_data=migration_data,
+                pin=pin,
+                testing_mode=self.migration_testing_mode,
             )
 
             if not success:
