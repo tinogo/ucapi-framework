@@ -17,7 +17,7 @@ _LOG = logging.getLogger(__name__)
 class EntityMigrationMapping(TypedDict):
     """Entity migration mapping for version upgrades.
 
-    Used by perform_migration() to specify how entity IDs should be renamed
+    Used by get_migration_data() to specify how entity IDs should be renamed
     during integration upgrades.
     """
 
@@ -31,7 +31,7 @@ class EntityMigrationMapping(TypedDict):
 class MigrationData(TypedDict):
     """Complete migration data including driver IDs and entity mappings.
 
-    This is the full structure returned by perform_migration() and used by
+    This is the full structure returned by get_migration_data() and used by
     migrate_entities_on_remote() to perform the migration.
 
     **Important:** Specify driver_id WITHOUT the ".main" suffix. The migration

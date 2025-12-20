@@ -403,12 +403,12 @@ async def is_migration_required(self, previous_version: str) -> bool:
     return False
 ```
 
-#### 2. perform_migration()
+#### 2. get_migration_data()
 
 Generate the entity ID mappings:
 
 ```python
-async def perform_migration(
+async def get_migration_data(
     self, previous_version: str, current_version: str
 ) -> MigrationData:
     """Generate entity ID mappings for migration.
@@ -483,7 +483,7 @@ class MySetupFlow(BaseSetupFlow[MyDeviceConfig]):
         except (ValueError, IndexError):
             return False
     
-    async def perform_migration(
+    async def get_migration_data(
         self, previous_version: str, current_version: str
     ) -> MigrationData:
         """Migrate entity IDs from v1 to v2 format."""
@@ -524,7 +524,7 @@ class MySetupFlow(BaseSetupFlow[MyDeviceConfig]):
 If your driver ID changes between versions:
 
 ```python
-async def perform_migration(
+async def get_migration_data(
     self, previous_version: str, current_version: str
 ) -> MigrationData:
     """Migrate with driver ID change."""
@@ -552,7 +552,7 @@ For advanced use cases, you can programmatically trigger migration on the Remote
 from ucapi_framework.migration import migrate_entities_on_remote
 
 # In your integration code
-migration_data = await setup_flow.perform_migration("1.0.0", "2.0.0")
+migration_data = await setup_flow.get_migration_data("1.0.0", "2.0.0")
 
 success = await migrate_entities_on_remote(
     remote_url="http://192.168.1.100",
@@ -587,7 +587,7 @@ async def test_migration():
     assert await setup_flow.is_migration_required("2.0.0") is False
     
     # Test migration data
-    migration_data = await setup_flow.perform_migration("1.5.0", "2.0.0")
+    migration_data = await setup_flow.get_migration_data("1.5.0", "2.0.0")
     
     assert migration_data["previous_driver_id"] == "myintegration"
     assert migration_data["new_driver_id"] == "myintegration"

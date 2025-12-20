@@ -1025,7 +1025,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         """
         Handle migration execution request.
 
-        Expects previous_version and current_version, calls perform_migration(),
+        Expects previous_version and current_version, calls get_migration_data(),
         and returns the migration data for the manager to process.
 
         :param msg: User data response containing version info
@@ -1048,7 +1048,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
 
         try:
             # Call the overridable method that returns migration data
-            migration_data = await self.perform_migration(previous_version, current_version)
+            migration_data = await self.get_migration_data(previous_version, current_version)
 
             # Convert migration data to JSON for display
             migration_json = json.dumps(migration_data, indent=2)
@@ -1854,11 +1854,11 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         _ = previous_version  # Mark as intentionally unused
         return False
 
-    async def perform_migration(
+    async def get_migration_data(
         self, previous_version: str, current_version: str
     ) -> MigrationData:
         """
-        Perform migration and return entity name mappings.
+        Get migration data with entity name mappings.
 
         This method is called by the integration manager after an upgrade when
         is_migration_required() returned True. It should return a list of entity
@@ -1884,7 +1884,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         :return: MigrationData dictionary with driver IDs and entity mappings
 
         Example - Simple entity rename:
-            async def perform_migration(self, previous_version, current_version):
+            async def get_migration_data(self, previous_version, current_version):
                 from .migration import EntityMigrationMapping
                 
                 mappings: list[EntityMigrationMapping] = []
@@ -1905,7 +1905,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                 }
 
         Example - Using device class methods:
-            async def perform_migration(self, previous_version, current_version):
+            async def get_migration_data(self, previous_version, current_version):
                 from .migration import EntityMigrationMapping
                 
                 mappings: list[EntityMigrationMapping] = []
@@ -1929,7 +1929,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                 }
 
         Example - With migration logging:
-            async def perform_migration(self, previous_version, current_version):
+            async def get_migration_data(self, previous_version, current_version):
                 from .migration import EntityMigrationMapping
                 
                 _LOG.info("Migrating from %s to %s", previous_version, current_version)

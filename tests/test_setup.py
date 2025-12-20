@@ -1778,10 +1778,10 @@ class TestMigrationMethods:
         result = await setup_flow.is_migration_required("1.0.0")
         assert result is False
 
-    async def test_perform_migration_default_returns_empty(self, config_manager):
-        """Test that default implementation of perform_migration returns empty data."""
+    async def test_get_migration_data_default_returns_empty(self, config_manager):
+        """Test that default implementation of get_migration_data returns empty data."""
         setup_flow = ConcreteSetupFlow(config_manager)
-        result = await setup_flow.perform_migration("1.0.0", "2.0.0")
+        result = await setup_flow.get_migration_data("1.0.0", "2.0.0")
 
         assert result["previous_driver_id"] == ""
         assert result["new_driver_id"] == ""
@@ -1793,7 +1793,7 @@ class TestMigrationMethods:
         class FlowWithMigration(ConcreteSetupFlow):
             """Flow that has migration logic."""
 
-            async def perform_migration(self, previous_version, current_version):
+            async def get_migration_data(self, previous_version, current_version):
                 return {
                     "previous_driver_id": "old_driver",
                     "new_driver_id": "new_driver",
