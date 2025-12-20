@@ -1,0 +1,13 @@
+#!/bin/bash
+
+set -e
+
+echo "🔍 Running ruff checks..."
+
+# Run ruff check with auto-fix
+uv run ruff check --fix
+
+# Run ruff format
+uv run ruff format
+
+echo "✅ Ruff checks passed!"

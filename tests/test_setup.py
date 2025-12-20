@@ -179,10 +179,29 @@ class TestBaseSetupFlow:
 
         mock_driver = MagicMock()
         mock_driver.config_manager = config_manager
+        mock_driver.driver_id = None  # No driver_id set
+        mock_driver._device_class = type("MockDevice", (), {})
 
         handler = ConcreteSetupFlow.create_handler(mock_driver)
 
         assert callable(handler)
+
+    @pytest.mark.asyncio
+    async def test_create_handler_raises_on_missing_config_manager(self):
+        """Test that create_handler raises error when driver has no config_manager."""
+        from unittest.mock import MagicMock
+
+        mock_driver = MagicMock()
+        mock_driver.config_manager = None  # Missing config_manager
+        mock_driver.driver_id = None
+        mock_driver._device_class = type("MockDevice", (), {})
+
+        handler = ConcreteSetupFlow.create_handler(mock_driver)
+
+        # Should raise ValueError when called
+        request = DriverSetupRequest(reconfigure=False, setup_data={})
+        with pytest.raises(ValueError, match="config_manager must be set"):
+            await handler(request)
 
     @pytest.mark.asyncio
     async def test_handle_driver_setup_initial(self, setup_flow):
@@ -767,6 +786,8 @@ class TestSetupFlowAdvanced:
 
         mock_driver = MagicMock()
         mock_driver.config_manager = config_manager
+        mock_driver.driver_id = None
+        mock_driver._device_class = type("MockDevice", (), {})
 
         handler = ConcreteSetupFlow.create_handler(mock_driver)
 
@@ -1767,3 +1788,338 @@ class TestAdditionalConfigurationReturnTypes:
         assert config_manager.contains("test-device-2")
         device = config_manager.get("test-device-2")
         assert device.port == 7070
+
+
+class TestMigrationMethods:
+    """Test migration-related methods in BaseSetupFlow."""
+
+    async def test_is_migration_required_default_returns_false(self, config_manager):
+        """Test that default implementation of is_migration_required returns False."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+        result = await setup_flow.is_migration_required("1.0.0")
+        assert result is False
+
+    async def test_get_migration_data_default_returns_empty(self, config_manager):
+        """Test that default implementation of get_migration_data returns empty data."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+        result = await setup_flow.get_migration_data("1.0.0", "2.0.0")
+
+        assert result["previous_driver_id"] == ""
+        assert result["new_driver_id"] == ""
+        assert result["entity_mappings"] == []
+
+    async def test_handle_migration_response_with_data(self, config_manager):
+        """Test that _handle_migration_response performs migration and returns success."""
+        from unittest.mock import AsyncMock, patch
+
+        class FlowWithMigration(ConcreteSetupFlow):
+            """Flow that has migration logic."""
+
+            async def get_migration_data(self, previous_version, current_version):
+                return {
+                    "previous_driver_id": "old_driver",
+                    "new_driver_id": "new_driver",
+                    "entity_mappings": [
+                        {
+                            "previous_entity_id": "media_player.tv",
+                            "new_entity_id": "player.tv",
+                        }
+                    ],
+                }
+
+        setup_flow = FlowWithMigration(config_manager)
+
+        # Mock migrate_entities_on_remote to return True (success)
+        with patch(
+            "ucapi_framework.setup.migrate_entities_on_remote",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_migrate:
+            # Simulate migration request with all required fields
+            msg = UserDataResponse(
+                input_values={
+                    "previous_version": "1.0.0",
+                    "current_version": "2.0.0",
+                    "remote_url": "http://localhost",
+                    "pin": "1234",
+                }
+            )
+            result = await setup_flow._handle_migration_response(msg)
+
+            # Should return RequestUserInput with migration data and success
+            assert isinstance(result, RequestUserInput)
+            assert len(result.settings) == 3
+
+            # Check migration_success field
+            success_field = result.settings[0]
+            assert success_field["id"] == "migration_success"
+            assert success_field["field"]["checkbox"]["value"] is True
+
+            # Check migration_data field contains JSON
+            migration_field = result.settings[1]
+            assert migration_field["id"] == "migration_data"
+            migration_json = migration_field["field"]["textarea"]["value"]
+            migration_data = json.loads(migration_json)
+            assert migration_data["previous_driver_id"] == "old_driver"
+            assert migration_data["new_driver_id"] == "new_driver"
+
+            # Verify migrate_entities_on_remote was called
+            mock_migrate.assert_called_once()
+
+    async def test_handle_migration_response_missing_fields_reprompts(
+        self, config_manager
+    ):
+        """Test that _handle_migration_response re-shows form when required fields are missing."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+
+        # Missing current_version
+        msg = UserDataResponse(
+            input_values={"previous_version": "1.0.0", "pin": "1234"}
+        )
+        result = await setup_flow._handle_migration_response(msg)
+        assert isinstance(result, RequestUserInput)
+        assert result.title == {"en": "Perform Migration"}
+        # Should have error field
+        assert any(field["id"] == "error" for field in result.settings)
+
+        # Missing pin
+        msg = UserDataResponse(
+            input_values={
+                "previous_version": "1.0.0",
+                "current_version": "2.0.0",
+                "remote_url": "http://localhost",
+            }
+        )
+        result = await setup_flow._handle_migration_response(msg)
+        assert isinstance(result, RequestUserInput)
+        assert any(field["id"] == "error" for field in result.settings)
+
+        # Missing remote_url
+        msg = UserDataResponse(
+            input_values={
+                "previous_version": "1.0.0",
+                "current_version": "2.0.0",
+                "pin": "1234",
+                "remote_url": "",  # Empty string
+            }
+        )
+        result = await setup_flow._handle_migration_response(msg)
+        assert isinstance(result, RequestUserInput)
+        assert any(field["id"] == "error" for field in result.settings)
+
+    async def test_handle_migration_response_auto_fetch_version(self, config_manager):
+        """Test that driver_id enables automatic current version fetching."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        class FlowWithMigration(ConcreteSetupFlow):
+            """Flow that has migration logic."""
+
+            async def get_migration_data(self, previous_version, current_version):
+                return {
+                    "previous_driver_id": "old_driver",
+                    "new_driver_id": "new_driver",
+                    "entity_mappings": [
+                        {
+                            "previous_entity_id": "media_player.tv",
+                            "new_entity_id": "player.tv",
+                        }
+                    ],
+                }
+
+        # Create mock driver with driver_id
+        mock_driver = MagicMock()
+        mock_driver.driver_id = "mydriver"
+
+        setup_flow = FlowWithMigration(config_manager, driver=mock_driver)
+
+        # Mock both get_driver_version and migrate_entities_on_remote
+        with (
+            patch(
+                "ucapi_framework.setup.get_driver_version",
+                new_callable=AsyncMock,
+                return_value="2.0.0",
+            ) as mock_get_version,
+            patch(
+                "ucapi_framework.setup.migrate_entities_on_remote",
+                new_callable=AsyncMock,
+                return_value=True,
+            ) as mock_migrate,
+        ):
+            # Simulate migration request WITHOUT current_version
+            # It should be auto-fetched
+            msg = UserDataResponse(
+                input_values={
+                    "previous_version": "1.0.0",
+                    # No current_version provided
+                    "remote_url": "http://localhost",
+                    "pin": "1234",
+                }
+            )
+            result = await setup_flow._handle_migration_response(msg)
+
+            # Should have called get_driver_version to fetch current version
+            mock_get_version.assert_called_once_with(
+                remote_url="http://localhost",
+                driver_id="mydriver",
+                pin="1234",
+            )
+
+            # Should return success
+            assert isinstance(result, RequestUserInput)
+            success_field = result.settings[0]
+            assert success_field["id"] == "migration_success"
+            assert success_field["field"]["checkbox"]["value"] is True
+
+            # Verify migration was performed
+            mock_migrate.assert_called_once()
+
+    async def test_handle_migration_direct_execution_flow(self, config_manager):
+        """Test direct migration execution when both versions provided."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        class FlowWithMigration(ConcreteSetupFlow):
+            """Flow that has migration logic."""
+
+            async def get_migration_data(self, previous_version, current_version):
+                return {
+                    "previous_driver_id": "old_driver",
+                    "new_driver_id": "new_driver",
+                    "entity_mappings": [],
+                }
+
+        mock_driver = MagicMock()
+        mock_driver.driver_id = None  # No auto-fetch
+
+        setup_flow = FlowWithMigration(config_manager, driver=mock_driver)
+
+        with patch(
+            "ucapi_framework.setup.migrate_entities_on_remote",
+            new_callable=AsyncMock,
+            return_value=True,
+        ) as mock_migrate:
+            # Direct call with both versions (programmatic flow)
+            msg = UserDataResponse(
+                input_values={
+                    "previous_version": "1.0.0",
+                    "current_version": "2.0.0",
+                    "remote_url": "http://localhost",
+                    "pin": "1234",
+                }
+            )
+            result = await setup_flow._handle_migration(msg)
+
+            # Should go directly to migration execution
+            assert isinstance(result, RequestUserInput)
+            assert setup_flow._setup_step == SetupSteps.MIGRATION
+            mock_migrate.assert_called_once()
+
+    async def test_handle_migration_direct_check_flow(self, config_manager):
+        """Test direct migration check when only previous_version provided."""
+
+        class FlowWithMigrationCheck(ConcreteSetupFlow):
+            """Flow that checks migration requirement."""
+
+            async def is_migration_required(self, previous_version):
+                return previous_version == "1.0.0"
+
+        setup_flow = FlowWithMigrationCheck(config_manager)
+
+        # Direct call with only previous_version (check only)
+        msg = UserDataResponse(input_values={"previous_version": "1.0.0"})
+        result = await setup_flow._handle_migration(msg)
+
+        # Should return migration_required result
+        assert isinstance(result, RequestUserInput)
+        assert setup_flow._setup_step == SetupSteps.MIGRATION_CHECK
+        # Find migration_required field
+        migration_field = next(
+            f for f in result.settings if f["id"] == "migration_required"
+        )
+        assert migration_field["field"]["checkbox"]["value"] is True
+
+
+class TestAutoPopulateConfig:
+    """Test _auto_populate_config method."""
+
+    async def test_auto_populate_matching_fields(self, config_manager):
+        """Test that _auto_populate_config sets matching attributes."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+
+        # Create pending config
+        setup_flow._pending_device_config = DeviceConfigForTests(
+            identifier="dev1", name="Device 1", address="", port=8080
+        )
+
+        # Auto-populate with input values
+        input_values = {"address": "192.168.1.100", "port": 9090}
+        setup_flow._auto_populate_config(input_values)
+
+        # Check populated fields
+        assert setup_flow._pending_device_config.address == "192.168.1.100"
+        assert setup_flow._pending_device_config.port == 9090
+
+        # Original fields unchanged
+        assert setup_flow._pending_device_config.identifier == "dev1"
+        assert setup_flow._pending_device_config.name == "Device 1"
+
+    async def test_auto_populate_skips_none_values(self, config_manager):
+        """Test that None values are skipped during auto-population."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+
+        setup_flow._pending_device_config = DeviceConfigForTests(
+            identifier="dev1", name="Device 1", address="192.168.1.1", port=8080
+        )
+
+        # Try to populate with None value
+        input_values = {"address": None, "port": None}
+        setup_flow._auto_populate_config(input_values)
+
+        # Values should remain unchanged
+        assert setup_flow._pending_device_config.address == "192.168.1.1"
+        assert setup_flow._pending_device_config.port == 8080
+
+    async def test_auto_populate_skips_internal_fields(self, config_manager):
+        """Test that fields starting with _ are skipped."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+
+        setup_flow._pending_device_config = DeviceConfigForTests(
+            identifier="dev1", name="Device 1", address="192.168.1.1", port=8080
+        )
+
+        # Try to set internal fields (should be ignored)
+        input_values = {"_internal": "value", "__private": "value"}
+        setup_flow._auto_populate_config(input_values)
+
+        # Should not raise an error
+        assert setup_flow._pending_device_config.identifier == "dev1"
+
+    async def test_auto_populate_handles_none_pending_config(self, config_manager):
+        """Test that method handles None pending config gracefully."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+        setup_flow._pending_device_config = None
+
+        # Should not raise an error
+        setup_flow._auto_populate_config({"field": "value"})
+
+        # Pending config should still be None
+        assert setup_flow._pending_device_config is None
+
+    async def test_auto_populate_ignores_nonexistent_fields(self, config_manager):
+        """Test that fields not in config are ignored."""
+        setup_flow = ConcreteSetupFlow(config_manager)
+
+        setup_flow._pending_device_config = DeviceConfigForTests(
+            identifier="dev1", name="Device 1", address="192.168.1.1", port=8080
+        )
+
+        # Include non-existent fields
+        input_values = {
+            "address": "192.168.1.100",
+            "unknown_field": "should_be_ignored",
+            "another_unknown": 123,
+        }
+        setup_flow._auto_populate_config(input_values)
+
+        # Only address should change
+        assert setup_flow._pending_device_config.address == "192.168.1.100"
+        assert setup_flow._pending_device_config.port == 8080

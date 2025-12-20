@@ -124,6 +124,7 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         entity_classes: list[type[Entity]] | type[Entity],
         require_connection_before_registry: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
+        driver_id: str | None = None,
     ):
         """
         Initialize the integration driver.
@@ -136,11 +137,14 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
                                                    available entities after connection. Useful for hub-based
                                                    integrations that populate entities dynamically on connection.
         :param loop: The asyncio event loop (optional, defaults to asyncio.get_running_loop())
+        :param driver_id: Optional driver/integration ID. Used for entity ID migration to automatically
+                         fetch the current version from the Remote, eliminating manual entry during upgrades.
         """
         self._loop = loop if loop is not None else asyncio.get_event_loop()
         self.api = uc.IntegrationAPI(self._loop)
         self._device_class = device_class
         self._require_connection_before_registry = require_connection_before_registry
+        self.driver_id = driver_id
 
         # Allow passing a single entity class or a list
         if isinstance(entity_classes, type):
