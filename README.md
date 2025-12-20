@@ -209,6 +209,51 @@ mkdocs serve
 
 Visit <http://127.0.0.1:8000> to view the docs.
 
+## Development
+
+### Setup
+
+```bash
+# Install development dependencies (includes ruff)
+uv sync --group dev
+```
+
+Git hooks are automatically active from the `git-hooks/` directory:
+
+- **pre-commit**: Runs `ruff check --fix` and `ruff format` via `uv run`
+
+All development tools run through `uv` and are configured in `pyproject.toml`.
+
+### Code Quality
+
+This project uses [Ruff](https://github.com/astral-sh/ruff) for both linting and formatting.
+
+```bash
+# Run linter
+ruff check
+
+# Run linter with auto-fix
+ruff check --fix
+
+# Run formatter
+ruff format
+
+# Check formatting without making changes
+ruff format --check
+```
+
+Ruff is configured in `pyproject.toml` to match Black's formatting style and includes Flake8-compatible rules.
+
+### Testing
+
+```bash
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=ucapi_framework --cov-report=term-missing
+```
+
 ## License
 
 Mozilla Public License Version 2.0

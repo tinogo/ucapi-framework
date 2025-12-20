@@ -30,7 +30,7 @@ from ucapi_framework.driver import BaseIntegrationDriver
 
 from .discovery import DiscoveredDevice, BaseDiscovery
 from .config import BaseConfigManager
-from .migration import MigrationData
+from .migration import MigrationData, migrate_entities_on_remote, get_driver_version
 
 _LOG = logging.getLogger(__name__)
 
@@ -107,7 +107,9 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
 
     @classmethod
     def create_handler(
-        cls, driver: BaseIntegrationDriver, discovery: BaseDiscovery | None = None
+        cls,
+        driver: BaseIntegrationDriver,
+        discovery: BaseDiscovery | None = None,
     ):
         """
         Create a setup handler function with the given configuration.
@@ -115,13 +117,17 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         This is a convenience factory method that creates a closure containing
         the setup flow instance, suitable for passing to IntegrationAPI.init().
 
+        The driver_id is automatically extracted from the driver instance. If the driver
+        has a driver_id set, it will be used to automatically fetch the current version
+        from the Remote during migration.
+
         Example usage in driver's main():
             discovery = MyDiscovery(api_key="...", timeout=30)
             setup_handler = MySetupFlow.create_handler(driver, discovery=discovery)
             api.init("driver-name", setup_handler=setup_handler)
 
-        :param driver: The driver instance. The config_manager will be
-                      retrieved from driver.config_manager.
+        :param driver: The driver instance. The config_manager and driver_id will be
+                      retrieved from the driver.
         :param discovery: Optional initialized discovery instance for auto-discovery.
                          Pass None if the device does not support discovery.
         :return: Async function that handles SetupDriver messages
@@ -881,7 +887,9 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                 f"Failed to restore configuration: {str(err)}", restore_data
             )
 
-    async def _handle_migration(self, msg: UserDataResponse | None = None) -> RequestUserInput | SetupComplete | SetupError:
+    async def _handle_migration(
+        self, msg: UserDataResponse | None = None
+    ) -> RequestUserInput | SetupComplete | SetupError:
         """
         Handle migration request.
 
@@ -893,12 +901,16 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         :return: Setup action
         """
         # Check if this is a migration execution request (has both versions) - check this FIRST
-        if msg and "current_version" in msg.input_values and "previous_version" in msg.input_values:
+        if (
+            msg
+            and "current_version" in msg.input_values
+            and "previous_version" in msg.input_values
+        ):
             # Direct flow: perform migration immediately
             _LOG.info("Starting migration execution (direct)")
             self._setup_step = SetupSteps.MIGRATION
             return await self._handle_migration_response(msg)
-        
+
         # Check if manager provided just previous_version (migration check only)
         if msg and "previous_version" in msg.input_values:
             # Direct flow: perform check immediately
@@ -967,33 +979,68 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         if migration_required and self.show_migration_in_ui:
             _LOG.info("Migration required, showing execution form")
             self._setup_step = SetupSteps.MIGRATION
-            return RequestUserInput(
-                {"en": "Perform Migration"},
+
+            # Build form fields
+            fields = [
+                {
+                    "id": "info",
+                    "label": {"en": "Migration Required"},
+                    "field": {
+                        "label": {
+                            "value": {
+                                "en": f"Migration is required from version {previous_version}. "
+                                f"Provide the migration details to update entity references on the Remote."
+                            }
+                        }
+                    },
+                },
+                {
+                    "id": "previous_version",
+                    "label": {"en": "Previous Version"},
+                    "field": {"text": {"value": previous_version}},
+                },
+            ]
+
+            # Only show current_version input if driver doesn't have driver_id
+            # Otherwise, it will be fetched automatically
+            driver_id = self.driver.driver_id if self.driver else None
+            if not driver_id:
+                fields.append(
+                    {
+                        "id": "current_version",
+                        "label": {"en": "Current Version"},
+                        "field": {"text": {"value": ""}},
+                    }
+                )
+
+            fields.extend(
                 [
                     {
-                        "id": "info",
-                        "label": {"en": "Migration Required"},
+                        "id": "remote_url",
+                        "label": {"en": "Remote URL"},
+                        "field": {"text": {"value": "http://localhost"}},
+                    },
+                    {
+                        "id": "remote_url_note",
+                        "label": {"en": "Note"},
                         "field": {
                             "label": {
                                 "value": {
-                                    "en": f"Migration is required from version {previous_version}. "
-                                    f"Provide the current version to perform the migration."
+                                    "en": "Use 'http://localhost' if this integration runs on the Remote. "
+                                    "Otherwise, provide the Remote's IP address (e.g., 'http://192.168.1.100')."
                                 }
                             }
                         },
                     },
                     {
-                        "id": "previous_version",
-                        "label": {"en": "Previous Version"},
-                        "field": {"text": {"value": previous_version}},
-                    },
-                    {
-                        "id": "current_version",
-                        "label": {"en": "Current Version"},
+                        "id": "pin",
+                        "label": {"en": "Remote PIN"},
                         "field": {"text": {"value": ""}},
                     },
-                ],
+                ]
             )
+
+            return RequestUserInput({"en": "Perform Migration"}, fields)
 
         # Return a screen with the result that manager can read
         # The manager will look for the migration_required field value
@@ -1025,46 +1072,140 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         """
         Handle migration execution request.
 
-        Expects previous_version and current_version, calls get_migration_data(),
-        and returns the migration data for the manager to process.
+        Expects previous_version, remote_url, and pin. If driver_id is configured,
+        current_version will be automatically fetched from the Remote.
+        Calls get_migration_data() to get entity mappings, then calls
+        migrate_entities_on_remote() to perform the migration on the Remote.
 
-        :param msg: User data response containing version info
+        :param msg: User data response containing version info and Remote credentials
         :return: RequestUserInput with migration results or SetupComplete
         """
         previous_version = msg.input_values.get("previous_version", "").strip()
         current_version = msg.input_values.get("current_version", "").strip()
+        remote_url = msg.input_values.get("remote_url", "http://localhost").strip()
+        pin = msg.input_values.get("pin", "").strip()
 
-        if not previous_version or not current_version:
-            _LOG.error(
-                "Missing version information for migration: previous=%s, current=%s",
-                previous_version,
-                current_version,
+        # If driver has driver_id set and current_version is not provided, fetch it from Remote
+        driver_id = self.driver.driver_id if self.driver else None
+        if driver_id and not current_version and remote_url and pin:
+            _LOG.info("Fetching current version from Remote for driver %s", driver_id)
+
+            fetched_version = await get_driver_version(
+                remote_url=remote_url, driver_id=driver_id, pin=pin
             )
-            return SetupError(error_type=IntegrationSetupError.OTHER)
 
-        _LOG.info(
-            "Performing migration: %s -> %s", previous_version, current_version
-        )
+            if fetched_version:
+                current_version = fetched_version
+                _LOG.info("Retrieved current version from Remote: %s", current_version)
+            else:
+                _LOG.warning("Failed to fetch current version from Remote")
+
+        # Validate required fields - if missing, re-show the form with current values
+        missing_fields = []
+        if not current_version:
+            missing_fields.append("Current Version")
+        if not remote_url:
+            missing_fields.append("Remote URL")
+        if not pin:
+            missing_fields.append("Remote PIN")
+
+        if missing_fields:
+            _LOG.warning(
+                "Missing required fields for migration: %s", ", ".join(missing_fields)
+            )
+            return RequestUserInput(
+                {"en": "Perform Migration"},
+                [
+                    {
+                        "id": "error",
+                        "label": {"en": "Missing Information"},
+                        "field": {
+                            "label": {
+                                "value": {
+                                    "en": f"Please provide the following required fields: {', '.join(missing_fields)}"
+                                }
+                            }
+                        },
+                    },
+                    {
+                        "id": "previous_version",
+                        "label": {"en": "Previous Version"},
+                        "field": {"text": {"value": previous_version}},
+                    },
+                    {
+                        "id": "current_version",
+                        "label": {"en": "Current Version"},
+                        "field": {"text": {"value": current_version}},
+                    },
+                    {
+                        "id": "remote_url",
+                        "label": {"en": "Remote URL"},
+                        "field": {"text": {"value": remote_url or "http://localhost"}},
+                    },
+                    {
+                        "id": "remote_url_note",
+                        "label": {"en": "Note"},
+                        "field": {
+                            "label": {
+                                "value": {
+                                    "en": "Use 'http://localhost' if this integration runs on the Remote. "
+                                    "Otherwise, provide the Remote's IP address (e.g., 'http://192.168.1.100')."
+                                }
+                            }
+                        },
+                    },
+                    {
+                        "id": "pin",
+                        "label": {"en": "Remote PIN"},
+                        "field": {"text": {"value": pin}},
+                    },
+                ],
+            )
+
+        # At this point, all required fields are present
+        assert current_version is not None, "current_version should be validated above"
+
+        _LOG.info("Performing migration: %s -> %s", previous_version, current_version)
 
         try:
-            # Call the overridable method that returns migration data
-            migration_data = await self.get_migration_data(previous_version, current_version)
-
-            # Convert migration data to JSON for display
-            migration_json = json.dumps(migration_data, indent=2)
+            # Get the migration data from the developer's implementation
+            migration_data = await self.get_migration_data(
+                previous_version, current_version
+            )
 
             entity_count = len(migration_data.get("entity_mappings", []))
             _LOG.info(
-                "Migration completed: %d entity mappings, driver %s -> %s",
+                "Generated migration data: %d entity mappings, driver %s -> %s",
                 entity_count,
                 migration_data.get("previous_driver_id"),
                 migration_data.get("new_driver_id"),
             )
 
-            # Return the migration data in a format the manager can read
+            # Perform the migration on the Remote
+            _LOG.info("Executing migration on Remote at %s", remote_url)
+            success = await migrate_entities_on_remote(
+                remote_url=remote_url, migration_data=migration_data, pin=pin
+            )
+
+            if not success:
+                _LOG.error("Migration failed on Remote")
+                return SetupError(error_type=IntegrationSetupError.OTHER)
+
+            _LOG.info("Migration completed successfully on Remote")
+
+            # Convert migration data to JSON for display
+            migration_json = json.dumps(migration_data, indent=2)
+
+            # Return the migration data and success status
+            # Manager can read migration_success and migration_data fields
             return RequestUserInput(
                 {"en": "Migration Complete"},
                 [
+                    {
+                        "id": "migration_success",
+                        "label": {"en": "Migration Status"},
+                        "field": {"checkbox": {"value": True}},
+                    },
                     {
                         "id": "migration_data",
                         "label": {"en": "Migration Data (JSON)"},
@@ -1076,9 +1217,10 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                         "field": {
                             "label": {
                                 "value": {
-                                    "en": f"Migration from {previous_version} to {current_version} completed successfully.\n"
+                                    "en": f"✓ Migration from {previous_version} to {current_version} completed successfully.\n"
                                     f"Driver: {migration_data.get('previous_driver_id')} → {migration_data.get('new_driver_id')}\n"
-                                    f"Entity mappings: {entity_count}"
+                                    f"Entity mappings: {entity_count}\n"
+                                    f"Remote: {remote_url}"
                                 }
                             }
                         },
@@ -1886,9 +2028,9 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         Example - Simple entity rename:
             async def get_migration_data(self, previous_version, current_version):
                 from .migration import EntityMigrationMapping
-                
+
                 mappings: list[EntityMigrationMapping] = []
-                
+
                 # Load all device configs
                 for device in self.config.all():
                     # Old naming: {device_id}_player
@@ -1897,7 +2039,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                         "previous_entity_id": f"{device.identifier}_player",
                         "new_entity_id": f"{device.identifier}.player"
                     })
-                
+
                 return {
                     "previous_driver_id": "mydriver_v1",
                     "new_driver_id": "mydriver_v2",
@@ -1907,21 +2049,21 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         Example - Using device class methods:
             async def get_migration_data(self, previous_version, current_version):
                 from .migration import EntityMigrationMapping
-                
+
                 mappings: list[EntityMigrationMapping] = []
-                
+
                 for device in self.config.all():
                     # Use class method to generate entity IDs
                     old_entities = self.device_class.get_v1_entity_ids(device)
                     new_entities = self.device_class.get_v2_entity_ids(device)
-                    
+
                     for old, new in zip(old_entities, new_entities):
                         if old != new:
                             mappings.append({
                                 "previous_entity_id": old,
                                 "new_entity_id": new
                             })
-                
+
                 return {
                     "previous_driver_id": self.get_driver_id(previous_version),
                     "new_driver_id": self.get_driver_id(current_version),
@@ -1931,16 +2073,16 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         Example - With migration logging:
             async def get_migration_data(self, previous_version, current_version):
                 from .migration import EntityMigrationMapping
-                
+
                 _LOG.info("Migrating from %s to %s", previous_version, current_version)
                 mappings: list[EntityMigrationMapping] = []
-                
+
                 for device in self.config.all():
                     device_mappings = self._migrate_device_entities(device)
                     mappings.extend(device_mappings)
-                    _LOG.debug("Migrated %d entities for %s", 
+                    _LOG.debug("Migrated %d entities for %s",
                               len(device_mappings), device.name)
-                
+
                 return {
                     "previous_driver_id": "myintegration",
                     "new_driver_id": "myintegration",  # Driver ID unchanged
@@ -1949,8 +2091,4 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         """
         _ = previous_version  # Mark as intentionally unused
         _ = current_version
-        return {
-            "previous_driver_id": "",
-            "new_driver_id": "",
-            "entity_mappings": []
-        }
+        return {"previous_driver_id": "", "new_driver_id": "", "entity_mappings": []}

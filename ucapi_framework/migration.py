@@ -679,3 +679,79 @@ async def verify_migration(
     except Exception as err:  # pylint: disable=broad-except
         _LOG.error("Unexpected error during verification: %s", err)
         return False
+
+
+async def get_driver_version(
+    remote_url: str,
+    driver_id: str,
+    pin: str | None = None,
+    api_key: str | None = None,
+) -> str | None:
+    """
+    Get the current version of a driver from the Remote.
+
+    Fetches driver information from the Remote's API to retrieve the version string.
+    This is useful for automatically determining the current version during migration
+    without requiring the user to manually enter it.
+
+    Authentication can be done via PIN (Basic Auth) or API key (Bearer token).
+    One of `pin` or `api_key` must be provided.
+
+    :param remote_url: The Remote's base URL (e.g., "http://192.168.1.100")
+    :param driver_id: The driver/integration ID to query
+    :param pin: Remote's web-configurator PIN for Basic Auth (username: "web-configurator")
+    :param api_key: Remote's API key for Bearer token authentication
+    :return: Version string if successful, None if failed
+    :raises ValueError: If neither pin nor api_key is provided
+
+    Example:
+        version = await get_driver_version(
+            remote_url="http://192.168.1.100",
+            driver_id="mydriver",
+            pin="1234"
+        )
+        print(f"Current version: {version}")  # e.g., "2.0.0"
+    """
+    if not pin and not api_key:
+        raise ValueError("Either pin or api_key must be provided for authentication")
+
+    _LOG.debug("Fetching driver version for %s from %s", driver_id, remote_url)
+
+    try:
+        # Setup authentication
+        auth = None
+        headers = {"Content-Type": "application/json"}
+
+        if pin:
+            auth = aiohttp.BasicAuth(login="web-configurator", password=pin)
+        elif api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        async with aiohttp.ClientSession() as session:
+            # Fetch driver information
+            driver_url = f"{remote_url}/api/intg/drivers/{driver_id}"
+            async with session.get(
+                driver_url,
+                headers=headers,
+                auth=auth,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as response:
+                if response.status == 200:
+                    driver_data = await response.json()
+                    version = driver_data.get("version")
+                    if version:
+                        _LOG.info("Retrieved driver version: %s", version)
+                        return version
+                    else:
+                        _LOG.warning("Driver data does not contain version field")
+                        return None
+                else:
+                    _LOG.error("Failed to fetch driver info: HTTP %d", response.status)
+                    return None
+
+    except aiohttp.ClientError as err:
+        _LOG.error("Network error fetching driver version: %s", err)
+        return None
+    except Exception as err:  # pylint: disable=broad-except
+        _LOG.error("Unexpected error fetching driver version: %s", err)
+        return None

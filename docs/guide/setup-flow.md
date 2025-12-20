@@ -2,6 +2,34 @@
 
 The setup flow handles user interaction during device configuration. It provides a standard flow with extension points for customization.
 
+## Creating a Setup Handler
+
+Create a setup handler by calling `create_handler()` on your setup flow class:
+
+```python
+from ucapi_framework import BaseSetupFlow, BaseIntegrationDriver
+
+# Create your driver with optional driver_id for migration support
+driver = MyDriver(
+    device_class=MyDevice,
+    entity_classes=[MediaPlayer],
+    driver_id="mydriver"  # Optional: enables auto-fetch of current version during migration and thus is only needed if migration is supported
+)
+
+# Create setup handler - driver_id is automatically extracted from driver
+discovery = MyDiscovery(api_key="...", timeout=30)
+setup_handler = MySetupFlow.create_handler(driver, discovery=discovery)
+```
+
+**Driver ID for Migration:**
+
+The optional `driver_id` parameter on the `BaseIntegrationDriver` enables enhanced migration features:
+
+- **Without `driver_id`**: Users must manually enter the current version during migration
+- **With `driver_id`**: The framework automatically fetches the current version from the Remote using the integration's API
+
+This improves user experience during entity ID migrations by reducing the information users need to provide. See [Entity ID Migration](#entity-id-migration) for details.
+
 ## Overview
 
 The setup flow follows this pattern:
@@ -464,6 +492,34 @@ The `MigrationData` dictionary has three fields:
 - **Driver IDs**: Specify WITHOUT the `.main` suffix. The framework automatically appends `.main` to create the integration_id used by the Remote API.
 - **Entity IDs**: Specify WITHOUT the driver_id/integration_id prefix. Just the entity type and device identifier (e.g., `"media_player.tv"`, not `"mydriver.main.media_player.tv"`).
 - **Full Entity IDs**: The Remote uses the format `integration_id.entity_id` where `integration_id = driver_id + ".main"`.
+- **Automatic Migration**: When a user goes through the setup flow and migration is required, the framework will:
+  1. Call `is_migration_required()` to check if migration is needed
+  2. Prompt for previous version, Remote URL, and PIN
+  3. If your driver has `driver_id` set (via `BaseIntegrationDriver.__init__()`), automatically fetch the current version from the Remote
+  4. If driver doesn't have `driver_id` set, prompt the user to enter the current version manually
+  5. Call `get_migration_data()` to get entity mappings
+  6. Automatically call `migrate_entities_on_remote()` to perform the migration
+  7. Display success/failure results
+
+**Automatic Version Fetching:**
+
+When you create the driver with a `driver_id`:
+
+```python
+driver = MyDriver(
+    device_class=MyDevice,
+    entity_classes=[MediaPlayer],
+    driver_id="mydriver"  # Enables automatic version fetching
+)
+```
+
+The framework can automatically fetch the current version from the Remote during migration, eliminating the need for users to manually enter it. This requires:
+
+- The integration is already installed on the Remote (so the driver_id exists)
+- The user provides the Remote URL and PIN
+- The Remote API is accessible
+
+If automatic fetching fails (e.g., Remote unreachable, driver not found), the user will be re-prompted to enter the current version manually.
 
 ### Migration Example: Version Upgrade
 
