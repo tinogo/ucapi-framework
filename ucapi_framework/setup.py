@@ -747,7 +747,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                 self._migration_required,
                 self._previous_version,
             )
-            
+
             # Add as direct instance attributes (may be preserved by UC API)
             response.migration_required = self._migration_required  # type: ignore[attr-defined]
             response.previous_version = self._previous_version or ""  # type: ignore[attr-defined]
