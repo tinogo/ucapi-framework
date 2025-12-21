@@ -75,7 +75,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         driver: BaseIntegrationDriver | None = None,
         device_class: type | None = None,
         discovery: BaseDiscovery | None = None,
-        show_migration_in_ui: bool = False,
+        show_migration_in_ui: bool | None = None,
         migration_testing_mode: bool = True,
     ):
         """
@@ -92,7 +92,8 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                          This is typically instantiated in your driver's main() and
                          passed via create_handler().
         :param show_migration_in_ui: Whether to show migration option in configuration mode.
-                                    Default is False (hidden). Set to True for debugging/testing.
+                                    Default is None (auto-detect based on get_migration_data override).
+                                    Set to True/False to explicitly override auto-detection.
         :param migration_testing_mode: If True, migration executes all logic but skips PATCH calls.
                                        **TEMPORARY PARAMETER - Will be removed before final release**
                                        Default is False.
@@ -101,6 +102,14 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         self.driver = driver
         self.device_class = device_class
         self.discovery = discovery
+
+        # Auto-detect migration support if not explicitly set
+        if show_migration_in_ui is None:
+            # Check if get_migration_data is overridden in child class
+            show_migration_in_ui = (
+                type(self).get_migration_data != BaseSetupFlow.get_migration_data
+            )
+
         self.show_migration_in_ui = show_migration_in_ui
         self.migration_testing_mode = migration_testing_mode
         self._setup_step = SetupSteps.INIT
@@ -1090,6 +1099,11 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         remote_url = msg.input_values.get("remote_url", "http://localhost").strip()
         pin = msg.input_values.get("pin", "").strip()
 
+        # Ensure remote_url has protocol prefix
+        if remote_url and not remote_url.startswith(("http://", "https://")):
+            remote_url = f"http://{remote_url}"
+            _LOG.debug("Added http:// prefix to remote_url: %s", remote_url)
+
         # If driver has driver_id set and current_version is not provided, fetch it from Remote
         driver_id = self.driver.driver_id if self.driver else None
         if driver_id and not current_version and remote_url and pin:
@@ -1201,40 +1215,38 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
 
             _LOG.info("Migration completed successfully on Remote")
 
-            # Convert migration data to JSON for display
-            migration_json = json.dumps(migration_data, indent=2)
-
-            # Return the migration data and success status
-            # Manager can read migration_success and migration_data fields
-            return RequestUserInput(
-                {"en": "Migration Complete"},
-                [
-                    {
-                        "id": "migration_success",
-                        "label": {"en": "Migration Status"},
-                        "field": {"checkbox": {"value": True}},
-                    },
-                    {
-                        "id": "migration_data",
-                        "label": {"en": "Migration Data (JSON)"},
-                        "field": {"textarea": {"value": migration_json}},
-                    },
-                    {
-                        "id": "info",
-                        "label": {"en": "Migration Info"},
-                        "field": {
-                            "label": {
-                                "value": {
-                                    "en": f"✓ Migration from {previous_version} to {current_version} completed successfully.\n"
-                                    f"Driver: {migration_data.get('previous_driver_id')} → {migration_data.get('new_driver_id')}\n"
-                                    f"Entity mappings: {entity_count}\n"
-                                    f"Remote: {remote_url}"
-                                }
-                            }
-                        },
-                    },
-                ],
+            # Check if this is a manager/automated flow
+            # Manager sets automated=true to get migration data response instead of SetupComplete
+            is_automated = (
+                str(msg.input_values.get("automated", False)).strip().lower() == "true"
             )
+
+            if is_automated:
+                # Manager flow: return migration data for the manager to process
+                _LOG.debug(
+                    "Migration complete (automated flow) - returning migration data"
+                )
+                migration_json = json.dumps(migration_data, indent=2)
+
+                return RequestUserInput(
+                    {"en": "Migration Complete"},
+                    [
+                        {
+                            "id": "migration_success",
+                            "label": {"en": "Migration Status"},
+                            "field": {"checkbox": {"value": True}},
+                        },
+                        {
+                            "id": "migration_data",
+                            "label": {"en": "Migration Data (JSON)"},
+                            "field": {"textarea": {"value": migration_json}},
+                        },
+                    ],
+                )
+            else:
+                # User flow: just complete the setup
+                _LOG.info("Migration complete (user flow) - setup complete")
+                return SetupComplete()
 
         except Exception as err:  # pylint: disable=broad-except
             _LOG.error("Migration error: %s", err)

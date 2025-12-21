@@ -73,4 +73,4 @@ __all__ = [
     "create_entity_id",
 ]
 
-__version__ = "1.0.1"
+__version__ = "1.4.0b2"

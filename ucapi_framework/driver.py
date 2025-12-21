@@ -175,6 +175,15 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         """
         self._config_manager = value
 
+    @property
+    def loop(self) -> asyncio.AbstractEventLoop:
+        """
+        Get the asyncio event loop.
+
+        :return: The asyncio event loop instance
+        """
+        return self._loop
+
     async def register_all_configured_devices(self, connect: bool = False) -> None:
         """
         Register all devices from the configuration manager.
@@ -1568,7 +1577,7 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
     # Configuration Change Callbacks (can be overridden)
     # ========================================================================
 
-    def on_device_added(self, device_config: ConfigT) -> None:
+    def on_device_added(self, device_config: ConfigT | None) -> None:
         """
         Handle a newly added device in the configuration.
 
