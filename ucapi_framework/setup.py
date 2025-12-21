@@ -174,33 +174,22 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         """
         Main dispatcher for setup requests.
 
-        Automatically adds response metadata to all RequestUserInput responses
-        for programmatic access by the manager.
-
         :param msg: Setup driver request object
         :return: Setup action on how to continue
         """
-        result: SetupAction
-
         if isinstance(msg, DriverSetupRequest):
             self._setup_step = SetupSteps.INIT
             self._add_mode = False
-            result = await self._handle_driver_setup_request(msg)
+            return await self._handle_driver_setup_request(msg)
         elif isinstance(msg, UserDataResponse):
             _LOG.debug("User data response: %s", msg)
-            result = await self._handle_user_data_response(msg)
+            return await self._handle_user_data_response(msg)
         elif isinstance(msg, AbortDriverSetup):
             _LOG.info("Setup was aborted with code: %s", msg.error)
             self._setup_step = SetupSteps.INIT
-            result = SetupError()
+            return SetupError()
         else:
-            result = SetupError()
-
-        # Add metadata to all RequestUserInput responses for programmatic access
-        if isinstance(result, RequestUserInput):
-            result = self._add_response_metadata(result)
-
-        return result
+            return SetupError()
 
     async def _handle_driver_setup_request(
         self, msg: DriverSetupRequest
@@ -724,79 +713,49 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             self._pending_device_config = None
             return SetupError(error_type=IntegrationSetupError.OTHER)
 
-    def _add_response_metadata(self, response: RequestUserInput) -> RequestUserInput:
-        """
-        Add metadata to a RequestUserInput response for programmatic access.
-
-        Adds metadata both as instance attributes AND in a special _metadata
-        settings field. This dual approach ensures compatibility:
-        - Instance attributes for UC API library serialization (if supported)
-        - Settings field as fallback for managers that only read settings
-
-        Currently includes:
-        - migration_required: Boolean indicating if migration is needed
-        - previous_version: Version string being migrated from (if applicable)
-
-        :param response: The RequestUserInput to augment
-        :return: The same response with metadata attributes added
-        """
-        # Add migration metadata if available
-        if self._migration_required is not None:
-            _LOG.debug(
-                "Adding migration metadata: required=%s, version=%s",
-                self._migration_required,
-                self._previous_version,
-            )
-
-            # Add as direct instance attributes (may be preserved by UC API)
-            response.migration_required = self._migration_required  # type: ignore[attr-defined]
-            response.previous_version = self._previous_version or ""  # type: ignore[attr-defined]
-
-            # ALSO add as a structured metadata object in settings as fallback
-            # This ensures managers can access the data even if instance
-            # attributes aren't preserved during JSON serialization
-            response.settings.append(
-                {
-                    "id": "_internal_metadata",
-                    "field": {
-                        "label": {
-                            "value": {
-                                "migration_required": self._migration_required,
-                                "previous_version": self._previous_version or "",
-                            }
-                        }
-                    },
-                }
-            )
-            _LOG.debug("Metadata added, settings count: %d", len(response.settings))
-        else:
-            _LOG.debug("No migration metadata to add (_migration_required is None)")
-
-        return response
-
     async def _build_restore_prompt_screen(self) -> RequestUserInput:
         """
         Build the restore prompt screen for initial setup.
 
         This screen asks users if they want to restore from a backup
         before proceeding with normal setup flow.
+
+        If migration is required (based on previous_version), adds a visible
+        notification field that both informs the user and provides metadata
+        for the integration manager.
         """
         prompt_text = await self.get_restore_prompt_text()
 
+        settings = [
+            {
+                "id": "info",
+                "label": {"en": "Integration Upgrade"},
+                "field": {"label": {"value": {"en": prompt_text}}},
+            },
+        ]
+
+        # Add migration data field if migration is required (for manager consumption)
+        # Normal users won't see this since they don't provide previous_version
+        if self._migration_required is True:
+            settings.append(
+                {
+                    "id": "migration_required",
+                    "label": {"en": ""},
+                    "field": {"label": {"value": self._previous_version or ""}},
+                }
+            )
+
+        settings.append(
+            {
+                "id": "restore_from_backup",
+                "label": {"en": "Restore from backup"},
+                "field": {"checkbox": {"value": False}},
+            }
+        )
+
         return RequestUserInput(
             {"en": "Restore Configuration?"},
-            [
-                {
-                    "id": "info",
-                    "label": {"en": "Integration Upgrade"},
-                    "field": {"label": {"value": {"en": prompt_text}}},
-                },
-                {
-                    "id": "restore_from_backup",
-                    "label": {"en": "Restore from backup"},
-                    "field": {"checkbox": {"value": False}},
-                },
-            ],
+            settings,
         )
 
     async def _handle_restore_prompt_response(

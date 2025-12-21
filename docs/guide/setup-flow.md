@@ -415,7 +415,7 @@ Implement migration when:
 
 ### Programmatic Migration Detection
 
-The framework supports **programmatic migration detection** during setup, allowing the integration manager to determine if migration is needed without requiring the user to manually trigger reconfigure mode.
+The framework supports **programmatic migration detection** during setup, allowing the integration manager to determine if migration is needed without requiring manual intervention.
 
 When the manager calls setup with `previous_version` in the `setup_data`:
 
@@ -431,36 +431,27 @@ The framework will:
 
 1. Call your `is_migration_required(previous_version)` method
 2. Store the result internally
-3. Include migration metadata in **all** `RequestUserInput` responses
+3. If migration is required, include a `migration_required` field in the restore prompt response
 
-The metadata is provided in a special `_internal_metadata` setting that contains a structured object with:
-- `migration_required`: Boolean indicating if migration is needed
-- `previous_version`: Version string being migrated from
-
-**Manager Usage Example:**
+The manager can detect this by checking for the presence of the `migration_required` field:
 
 ```python
-# Manager initiates setup with version info
+# Manager checks the initial setup response
 response = await driver_setup_handler(
     DriverSetupRequest(reconfigure=False, setup_data={"previous_version": "1.2.3"})
 )
 
-# Check metadata in response
+# Look for migration_required field
 if isinstance(response, RequestUserInput):
-    # Look for the _internal_metadata setting
     for setting in response.settings:
-        if setting.get("id") == "_internal_metadata":
-            metadata = setting["field"]["label"]["value"]
-            migration_required = metadata["migration_required"]  # True or False
-            previous_version = metadata["previous_version"]  # "1.2.3"
-            
-            if migration_required:
-                # Trigger migration flow before completing setup
-                pass
+        if setting.get("id") == "migration_required":
+            # Migration is needed - the field value contains the previous version
+            previous_version = setting["field"]["label"]["value"]
+            # Complete setup, then trigger migration via reconfigure
             break
 ```
 
-This allows the manager to detect migration requirements early in the setup process without manual intervention.
+This allows the manager to detect migration requirements early in the setup process. Normal users won't see this field since they don't provide `previous_version` in their setup requests.
 
 ### Implementing Migration
 
