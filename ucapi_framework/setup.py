@@ -113,8 +113,12 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
         self._pre_discovery_data: dict[
             str, Any
         ] = {}  # Store data from pre-discovery screens
-        self._migration_required: bool | None = None  # Cached migration requirement status
-        self._previous_version: str | None = None  # Previous version for migration check
+        self._migration_required: bool | None = (
+            None  # Cached migration requirement status
+        )
+        self._previous_version: str | None = (
+            None  # Previous version for migration check
+        )
 
     @classmethod
     def create_handler(
@@ -720,9 +724,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             self._pending_device_config = None
             return SetupError(error_type=IntegrationSetupError.OTHER)
 
-    def _add_response_metadata(
-        self, response: RequestUserInput
-    ) -> RequestUserInput:
+    def _add_response_metadata(self, response: RequestUserInput) -> RequestUserInput:
         """
         Add metadata to a RequestUserInput response for programmatic access.
 
