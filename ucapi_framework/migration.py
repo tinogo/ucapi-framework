@@ -755,3 +755,109 @@ async def get_driver_version(
     except Exception as err:  # pylint: disable=broad-except
         _LOG.error("Unexpected error fetching driver version: %s", err)
         return None
+
+
+async def validate_entities_configured(
+    remote_url: str,
+    migration_data: MigrationData,
+    pin: str | None = None,
+    api_key: str | None = None,
+) -> list[str]:
+    """
+    Validate that all entities to be migrated are configured on the Remote.
+
+    This checks if the new entities (that will be the result of migration) actually
+    exist on the Remote before attempting to migrate. Only entities that are configured
+    can be migrated - attempting to migrate unconfigured entities will fail.
+
+    Authentication can be done via PIN (Basic Auth) or API key (Bearer token).
+    One of `pin` or `api_key` must be provided.
+
+    :param remote_url: The Remote's base URL (e.g., "http://192.168.1.100")
+    :param migration_data: Migration data containing new_driver_id and entity_mappings
+    :param pin: Remote's web-configurator PIN for Basic Auth (username: "web-configurator")
+    :param api_key: Remote's API key for Bearer token authentication
+    :return: List of entity IDs (without integration_id prefix) that are NOT configured.
+             Empty list means all entities are configured and migration can proceed.
+    :raises ValueError: If neither pin nor api_key is provided
+
+    Example:
+        missing = await validate_entities_configured(
+            remote_url="http://192.168.1.100",
+            migration_data=migration_data,
+            api_key="my-api-key"
+        )
+        
+        if missing:
+            print(f"Cannot migrate - missing entities: {missing}")
+        else:
+            # All entities configured, safe to migrate
+            await migrate_entities_on_remote(...)
+    """
+    if not pin and not api_key:
+        raise ValueError("Either pin or api_key must be provided for authentication")
+
+    new_driver_id = migration_data.get("new_driver_id", "")
+    new_integration_id = (
+        new_driver_id if new_driver_id.endswith(".main") else f"{new_driver_id}.main"
+    )
+
+    _LOG.debug(
+        "Validating configured entities for integration: %s", new_integration_id
+    )
+
+    try:
+        # Build authentication headers
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        auth = None
+        if pin and not api_key:
+            auth = aiohttp.BasicAuth("web-configurator", pin)
+
+        async with aiohttp.ClientSession() as session:
+            entities_url = (
+                f"{remote_url}/api/entities?intg_ids={new_integration_id}&page=1&limit=100"
+            )
+            async with session.get(entities_url, headers=headers, auth=auth) as resp:
+                if resp.status != 200:
+                    _LOG.warning(
+                        "Failed to fetch entities from Remote: HTTP %d", resp.status
+                    )
+                    # Return empty list - can't validate, so don't block migration
+                    return []
+
+                result = await resp.json()
+                configured_entities = [
+                    entity.get("entity_id", "")
+                    for entity in result.get("entities", [])
+                ]
+                _LOG.info("Found %d configured entities on Remote", len(configured_entities))
+
+        # Check if all entities to be migrated are configured
+        missing_entities = []
+        for mapping in migration_data.get("entity_mappings", []):
+            new_entity_id = mapping.get("new_entity_id", "")
+            full_entity_id = f"{new_integration_id}.{new_entity_id}"
+
+            if full_entity_id not in configured_entities:
+                missing_entities.append(new_entity_id)
+                _LOG.warning("Entity not configured: %s", full_entity_id)
+
+        if missing_entities:
+            _LOG.error(
+                "Migration validation failed: %d entities are not configured on the Remote",
+                len(missing_entities),
+            )
+
+        return missing_entities
+
+    except aiohttp.ClientError as err:
+        _LOG.warning("Network error validating entities: %s", err)
+        # Return empty list - can't validate, so don't block migration
+        return []
+    except Exception as err:  # pylint: disable=broad-except
+        _LOG.warning("Unexpected error validating entities: %s", err)
+        # Return empty list - can't validate, so don't block migration
+        return []

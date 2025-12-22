@@ -30,7 +30,12 @@ from ucapi_framework.driver import BaseIntegrationDriver
 
 from .discovery import DiscoveredDevice, BaseDiscovery
 from .config import BaseConfigManager
-from .migration import MigrationData, migrate_entities_on_remote, get_driver_version
+from .migration import (
+    MigrationData,
+    migrate_entities_on_remote,
+    get_driver_version,
+    validate_entities_configured,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -1273,6 +1278,52 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                 migration_data.get("previous_driver_id"),
                 migration_data.get("new_driver_id"),
             )
+
+            # Validate that all entities to be migrated are configured on the Remote
+            missing_entities = await validate_entities_configured(
+                remote_url, migration_data, pin or None, api_key or None
+            )
+
+            if missing_entities:
+                _LOG.error(
+                    "Migration cannot proceed: %d entities are not configured on the Remote",
+                    len(missing_entities),
+                )
+                return RequestUserInput(
+                    {"en": "Migration Error"},
+                    [
+                        {
+                            "id": "error",
+                            "label": {"en": "Entities Not Configured"},
+                            "field": {
+                                "label": {
+                                    "value": {
+                                        "en": f"Migration cannot proceed because {len(missing_entities)} entity(ies) "
+                                        f"are not configured on the Remote. Please ensure all devices are set up "
+                                        f"before attempting migration. Missing: {', '.join(missing_entities[:5])}"
+                                        + (
+                                            f" and {len(missing_entities) - 5} more..."
+                                            if len(missing_entities) > 5
+                                            else ""
+                                        )
+                                    }
+                                }
+                            },
+                        },
+                        {
+                            "id": "info",
+                            "label": {"en": "Next Steps"},
+                            "field": {
+                                "label": {
+                                    "value": {
+                                        "en": "Complete the integration setup first, then return to configuration mode "
+                                        "and select 'Perform migration' to migrate your entity references."
+                                    }
+                                }
+                            },
+                        },
+                    ],
+                )
 
             # Perform the migration on the Remote
             _LOG.info("Executing migration on Remote at %s", remote_url)
