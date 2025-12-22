@@ -57,6 +57,7 @@ class SetupSteps(IntEnum):
     RESTORE = 8
     MIGRATION_CHECK = 9
     MIGRATION = 10
+    ERROR = 11
 
 
 class BaseSetupFlow(ABC, Generic[ConfigT]):
@@ -283,6 +284,11 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
 
         if self._setup_step == SetupSteps.MIGRATION:
             return await self._handle_migration_response(msg)
+
+        if self._setup_step == SetupSteps.ERROR:
+            # User acknowledged error screen, complete setup
+            _LOG.info("User acknowledged error screen, completing setup")
+            return SetupComplete()
 
         _LOG.error("No handler for user input in step: %s", self._setup_step)
         return SetupError()
@@ -1289,6 +1295,7 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
                     "Migration cannot proceed: %d entities are not configured on the Remote",
                     len(missing_entities),
                 )
+                self._setup_step = SetupSteps.ERROR
                 return RequestUserInput(
                     {"en": "Migration Error"},
                     [
