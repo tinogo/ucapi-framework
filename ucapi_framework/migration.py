@@ -162,7 +162,7 @@ async def migrate_entities_on_remote(
         headers["Authorization"] = f"Bearer {api_key}"
 
     auth = None
-    if pin:
+    if pin and not api_key:
         auth = aiohttp.BasicAuth(login="web-configurator", password=pin)
 
     try:
@@ -637,7 +637,7 @@ async def verify_migration(
         headers["Authorization"] = f"Bearer {api_key}"
 
     auth = None
-    if pin:
+    if pin and not api_key:
         auth = aiohttp.BasicAuth(login="web-configurator", password=pin)
 
     try:
@@ -722,10 +722,10 @@ async def get_driver_version(
         auth = None
         headers = {"Content-Type": "application/json"}
 
-        if pin:
-            auth = aiohttp.BasicAuth(login="web-configurator", password=pin)
-        elif api_key:
+        if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        elif pin:
+            auth = aiohttp.BasicAuth(login="web-configurator", password=pin)
 
         async with aiohttp.ClientSession() as session:
             # Fetch driver information

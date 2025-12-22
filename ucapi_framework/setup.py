@@ -1186,6 +1186,13 @@ class BaseSetupFlow(ABC, Generic[ConfigT]):
             remote_url = f"http://{remote_url}"
             _LOG.debug("Added http:// prefix to remote_url: %s", remote_url)
 
+        if api_key:
+            _LOG.debug(
+                "Using API Key for Remote authentication %s", api_key[:4] + "****"
+            )
+        elif pin:
+            _LOG.debug("Using PIN for Remote authentication %s", pin[:4])
+
         # If driver has driver_id set and current_version is not provided, fetch it from Remote
         driver_id = self.driver.driver_id if self.driver else None
         if driver_id and not current_version and remote_url and (pin or api_key):
