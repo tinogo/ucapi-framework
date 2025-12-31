@@ -45,6 +45,9 @@ from .migration import (
     migrate_entities_on_remote,
     verify_migration,
 )
+from .helpers import (
+    find_orphaned_entities,
+)
 
 __all__ = [
     "BaseIntegrationDriver",
@@ -70,6 +73,7 @@ __all__ = [
     "MigrationData",
     "migrate_entities_on_remote",
     "verify_migration",
+    "find_orphaned_entities",
     "create_entity_id",
 ]
 
