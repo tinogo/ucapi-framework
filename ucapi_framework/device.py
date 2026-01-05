@@ -155,6 +155,30 @@ class BaseDeviceInterface(ABC):
         """Return the current device state."""
         return self._state
 
+    def get_device_attributes(self, entity_id: str) -> dict[str, Any]:
+        """
+        Provide entity-specific attributes beyond STATE.
+
+        This method is called by the framework when refreshing entity state to allow
+        devices to supply additional attributes (e.g., SOURCE_LIST, SOUND_MODE_LIST,
+        VOLUME, BRIGHTNESS, etc.) that should be included in the entity's attributes.
+
+        The default implementation returns an empty dict, meaning only STATE will be
+        updated. Override this method to provide device-specific attributes.
+
+        Example implementation:
+            def get_device_attributes(self, entity_id: str) -> dict[str, Any]:
+                return {
+                    media_player.Attributes.SOURCE_LIST: list(self.source_list),
+                    media_player.Attributes.SOUND_MODE_LIST: list(self.sound_mode_list),
+                    media_player.Attributes.VOLUME: self.volume,
+                }
+
+        :param entity_id: Entity identifier to get attributes for
+        :return: Dictionary of entity attributes (Attribute enum -> value)
+        """
+        return {}
+
     @abstractmethod
     async def connect(self) -> bool:
         """
