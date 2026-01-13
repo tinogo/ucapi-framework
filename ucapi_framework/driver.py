@@ -30,6 +30,7 @@ from ucapi import (
 
 from ucapi_framework.config import BaseConfigManager
 from .device import BaseDeviceInterface, DeviceEvents
+from .entity import Entity as FrameworkEntity
 
 # Type variables for generic device and entity types
 DeviceT = TypeVar("DeviceT", bound=BaseDeviceInterface)  # Device interface type
@@ -1009,13 +1010,22 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
                 return
 
         _LOG.debug("[%s] Device update: %s", entity_id, update)
+        
+        # Check if this entity inherits from our framework Entity ABC
+        # If so, use its custom methods for state mapping and attribute updates
+        has_custom_behavior = isinstance(configured_entity, FrameworkEntity)
+        
         attributes: dict[str, Any] = {}
 
         match configured_entity.entity_type:
             case EntityTypes.BUTTON:
                 # Button entities: STATE
                 if button.Attributes.STATE.value in update:
-                    state = self.map_device_state(update[button.Attributes.STATE.value])
+                    state_value = update[button.Attributes.STATE.value]
+                    if has_custom_behavior:
+                        state = configured_entity.map_entity_states(state_value)
+                    else:
+                        state = self.map_device_state(state_value)
                     attributes[button.Attributes.STATE] = state
 
             case EntityTypes.CLIMATE:
@@ -1033,7 +1043,10 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
                         value = update[attr.value]
                         # Apply state mapping for STATE attribute
                         if attr == climate.Attributes.STATE:
-                            value = self.map_device_state(value)
+                            if has_custom_behavior:
+                                value = configured_entity.map_entity_states(value)
+                            else:
+                                value = self.map_device_state(value)
                         attributes[attr] = value
 
             case EntityTypes.COVER:
@@ -1047,7 +1060,10 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
                         value = update[attr.value]
                         # Apply state mapping for STATE attribute
                         if attr == cover.Attributes.STATE:
-                            value = self.map_device_state(value)
+                            if has_custom_behavior:
+                                value = configured_entity.map_entity_states(value)
+                            else:
+                                value = self.map_device_state(value)
                         attributes[attr] = value
 
             case EntityTypes.LIGHT:
@@ -1063,7 +1079,10 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
                         value = update[attr.value]
                         # Apply state mapping for STATE attribute
                         if attr == light.Attributes.STATE:
-                            value = self.map_device_state(value)
+                            if has_custom_behavior:
+                                value = configured_entity.map_entity_states(value)
+                            else:
+                                value = self.map_device_state(value)
                         attributes[attr] = value
 
             case EntityTypes.MEDIA_PLAYER:
@@ -1075,9 +1094,11 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
                 # Check if state is being updated and is OFF
                 state_value = None
                 if media_player.Attributes.STATE.value in update:
-                    state_value = self.map_device_state(
-                        update[media_player.Attributes.STATE.value]
-                    )
+                    raw_state = update[media_player.Attributes.STATE.value]
+                    if has_custom_behavior:
+                        state_value = configured_entity.map_entity_states(raw_state)
+                    else:
+                        state_value = self.map_device_state(raw_state)
                     attributes[media_player.Attributes.STATE] = state_value
 
                 # If clear_media_when_off is True and state is OFF, clear all media attributes
@@ -1118,7 +1139,11 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
             case EntityTypes.REMOTE:
                 # Remote entities: STATE
                 if remote.Attributes.STATE.value in update:
-                    state = self.map_device_state(update[remote.Attributes.STATE.value])
+                    state_value = update[remote.Attributes.STATE.value]
+                    if has_custom_behavior:
+                        state = configured_entity.map_entity_states(state_value)
+                    else:
+                        state = self.map_device_state(state_value)
                     attributes[remote.Attributes.STATE] = state
 
             case EntityTypes.SENSOR:
@@ -1132,27 +1157,40 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
                         value = update[attr.value]
                         # Apply state mapping for STATE attribute
                         if attr == sensor.Attributes.STATE:
-                            value = self.map_device_state(value)
+                            if has_custom_behavior:
+                                value = configured_entity.map_entity_states(value)
+                            else:
+                                value = self.map_device_state(value)
                         attributes[attr] = value
 
             case EntityTypes.SWITCH:
                 # Switch entities: STATE
                 if switch.Attributes.STATE.value in update:
-                    state = self.map_device_state(update[switch.Attributes.STATE.value])
+                    state_value = update[switch.Attributes.STATE.value]
+                    if has_custom_behavior:
+                        state = configured_entity.map_entity_states(state_value)
+                    else:
+                        state = self.map_device_state(state_value)
                     attributes[switch.Attributes.STATE] = state
 
             case EntityTypes.IR_EMITTER:
                 # IR Emitter entities: STATE (Shares same state mapping as Remote)
                 if remote.Attributes.STATE.value in update:
-                    state = self.map_device_state(update[remote.Attributes.STATE.value])
+                    state_value = update[remote.Attributes.STATE.value]
+                    if has_custom_behavior:
+                        state = configured_entity.map_entity_states(state_value)
+                    else:
+                        state = self.map_device_state(state_value)
                     attributes[remote.Attributes.STATE] = state
 
             case EntityTypes.VOICE_ASSISTANT:
                 # Voice Assistant entities: STATE
                 if voice_assistant.Attributes.STATE.value in update:
-                    state = self.map_device_state(
-                        update[voice_assistant.Attributes.STATE.value]
-                    )
+                    state_value = update[voice_assistant.Attributes.STATE.value]
+                    if has_custom_behavior:
+                        state = configured_entity.map_entity_states(state_value)
+                    else:
+                        state = self.map_device_state(state_value)
                     attributes[voice_assistant.Attributes.STATE] = state
 
             case _:
@@ -1167,9 +1205,19 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         # Update entity attributes if any were found
         if attributes:
             if self.api.configured_entities.contains(entity_id):
-                self.api.configured_entities.update_attributes(entity_id, attributes)
+                if has_custom_behavior:
+                    # Use framework entity's update method which handles filtering
+                    configured_entity.update_attributes(attributes)
+                else:
+                    # Use direct API update for standard entities
+                    self.api.configured_entities.update_attributes(entity_id, attributes)
             elif self.api.available_entities.contains(entity_id):
-                self.api.available_entities.update_attributes(entity_id, attributes)
+                if has_custom_behavior:
+                    # Use framework entity's update method which handles filtering
+                    configured_entity.update_attributes(attributes)
+                else:
+                    # Use direct API update for standard entities
+                    self.api.available_entities.update_attributes(entity_id, attributes)
             _LOG.debug(
                 "[%s] Updated entity %s with attributes: %s",
                 entity_id,

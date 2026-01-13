@@ -21,6 +21,7 @@ See ucapi_framework.discovery module documentation for details.
 from .driver import BaseIntegrationDriver, create_entity_id
 from .setup import BaseSetupFlow, SetupSteps
 from .config import BaseConfigManager, get_config_path
+from .entity import Entity
 from .device import (
     BaseDeviceInterface,
     StatelessHTTPDevice,
@@ -55,6 +56,7 @@ __all__ = [
     "SetupSteps",
     "BaseConfigManager",
     "get_config_path",
+    "Entity",
     "BaseDeviceInterface",
     "StatelessHTTPDevice",
     "PollingDevice",
