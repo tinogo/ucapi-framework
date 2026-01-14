@@ -11,7 +11,6 @@ import dataclasses
 import json
 import logging
 import os
-from abc import ABC
 from typing import Any, Callable, Generic, Iterator, TypeVar, cast, get_args, get_origin
 
 _LOG = logging.getLogger(__name__)
@@ -98,7 +97,7 @@ class _EnhancedJSONEncoder(json.JSONEncoder):
         return super().default(o)
 
 
-class BaseConfigManager(ABC, Generic[DeviceT]):
+class BaseConfigManager(Generic[DeviceT]):
     """
     Base class for device configuration management.
 
