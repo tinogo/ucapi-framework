@@ -11,6 +11,47 @@ from typing import Any
 from ucapi import IntegrationAPI, media_player
 
 
+def map_state_to_media_player(device_state: Any) -> media_player.States:
+    """
+    Map a device-specific state to media_player.States.
+
+    This helper function provides the default state mapping logic used by both
+    Entity.map_entity_states() and BaseIntegrationDriver.map_device_state().
+
+    :param device_state: Device-specific state (string, enum, or any object with __str__)
+    :return: Media player state
+    """
+    if device_state is None:
+        return media_player.States.UNKNOWN
+
+    # If already a media_player.States enum, return it directly
+    if isinstance(device_state, media_player.States):
+        return device_state
+
+    # Convert to uppercase string for comparison
+    state_str = str(device_state).upper()
+
+    match state_str:
+        case "UNAVAILABLE":
+            return media_player.States.UNAVAILABLE
+        case "UNKNOWN":
+            return media_player.States.UNKNOWN
+        case "ON" | "MENU" | "IDLE" | "ACTIVE" | "READY":
+            return media_player.States.ON
+        case "OFF" | "POWER_OFF" | "POWERED_OFF" | "STOPPED":
+            return media_player.States.OFF
+        case "PLAYING" | "PLAY" | "SEEKING":
+            return media_player.States.PLAYING
+        case "PAUSED" | "PAUSE":
+            return media_player.States.PAUSED
+        case "STANDBY" | "SLEEP":
+            return media_player.States.STANDBY
+        case "BUFFERING" | "LOADING":
+            return media_player.States.BUFFERING
+        case _:
+            return media_player.States.UNKNOWN
+
+
 # pylint: disable=R0903
 class Entity(ABC):
     """
@@ -117,8 +158,8 @@ class Entity(ABC):
         """
         Convert a device-specific state to a UC API entity state.
 
-        DEFAULT IMPLEMENTATION: Converts device_state to uppercase string and maps
-        common state values to media_player.States:
+        DEFAULT IMPLEMENTATION: Uses map_state_to_media_player() helper to convert
+        device_state to uppercase string and map common state values to media_player.States:
 
         - UNAVAILABLE → UNAVAILABLE
         - UNKNOWN → UNKNOWN
@@ -148,32 +189,4 @@ class Entity(ABC):
         :param device_state: Device-specific state (string, enum, or any object with __str__)
         :return: UC API entity state (typically media_player.States)
         """
-        if device_state is None:
-            return media_player.States.UNKNOWN
-
-        # If already a media_player.States enum, return it directly
-        if isinstance(device_state, media_player.States):
-            return device_state
-
-        # Convert to uppercase string for comparison
-        state_str = str(device_state).upper()
-
-        match state_str:
-            case "UNAVAILABLE":
-                return media_player.States.UNAVAILABLE
-            case "UNKNOWN":
-                return media_player.States.UNKNOWN
-            case "ON" | "MENU" | "IDLE" | "ACTIVE" | "READY":
-                return media_player.States.ON
-            case "OFF" | "POWER_OFF" | "POWERED_OFF" | "STOPPED":
-                return media_player.States.OFF
-            case "PLAYING" | "PLAY" | "SEEKING":
-                return media_player.States.PLAYING
-            case "PAUSED" | "PAUSE":
-                return media_player.States.PAUSED
-            case "STANDBY" | "SLEEP":
-                return media_player.States.STANDBY
-            case "BUFFERING" | "LOADING":
-                return media_player.States.BUFFERING
-            case _:
-                return media_player.States.UNKNOWN
+        return map_state_to_media_player(device_state)
