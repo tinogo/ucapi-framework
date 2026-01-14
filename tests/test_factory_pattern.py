@@ -107,7 +107,7 @@ class TestFactoryPattern:
     def test_factory_function_returning_single_entity(self):
         """Test factory function that returns a single entity."""
 
-        def create_media_player(cfg, dev):
+        def create_media_player(cfg, dev):  # noqa: ARG001
             return media_player.MediaPlayer(
                 f"media_player.{cfg.identifier}",
                 cfg.name,
@@ -139,7 +139,7 @@ class TestFactoryPattern:
     def test_factory_function_returning_list(self):
         """Test factory function that returns a list of entities (Lyngdorf pattern)."""
 
-        def create_sensors(cfg, dev):
+        def create_sensors(cfg, dev):  # noqa: ARG001
             return [TestSensor(cfg, sensor_config) for sensor_config in SENSOR_TYPES]
 
         class FactoryListDriver(BaseIntegrationDriver):
@@ -174,7 +174,7 @@ class TestFactoryPattern:
         driver = LambdaDriver(
             device_class=TestDevice,
             entity_classes=[
-                lambda cfg, dev: [
+                lambda cfg, dev: [  # noqa: ARG005
                     TestSensor(cfg, sensor_config) for sensor_config in SENSOR_TYPES
                 ]
             ],
@@ -194,7 +194,7 @@ class TestFactoryPattern:
     def test_hub_based_discovery_pattern(self):
         """Test hub-based discovery with factories (Lutron pattern)."""
 
-        def create_lights(cfg, dev):
+        def create_lights(cfg, dev):  # noqa: ARG001
             return [
                 media_player.MediaPlayer(
                     f"light.{cfg.identifier}_{light['device_id']}",
@@ -207,7 +207,7 @@ class TestFactoryPattern:
                 for light in dev.lights
             ]
 
-        def create_scenes(cfg, dev):
+        def create_scenes(cfg, dev):  # noqa: ARG001
             return [
                 remote.Remote(
                     f"button.{cfg.identifier}_{scene['scene_id']}",
@@ -253,7 +253,7 @@ class TestFactoryPattern:
     def test_mixed_classes_and_factories(self):
         """Test mixing entity classes and factory functions."""
 
-        def create_sensors(cfg, dev):
+        def create_sensors(cfg, dev):  # noqa: ARG001
             return [TestSensor(cfg, sensor_config) for sensor_config in SENSOR_TYPES]
 
         class MixedDriver(BaseIntegrationDriver):
@@ -281,7 +281,7 @@ class TestFactoryPattern:
         # Need to mock create_entities since MediaPlayer class needs specific params
         # Instead, let's create a proper test
         class MediaPlayerEntity(media_player.MediaPlayer):
-            def __init__(self, cfg, dev):
+            def __init__(self, cfg, dev):  # noqa: ARG002
                 super().__init__(
                     f"media_player.{cfg.identifier}",
                     cfg.name,
@@ -296,7 +296,7 @@ class TestFactoryPattern:
             entity_classes=[
                 MediaPlayerEntity,  # Class
                 create_sensors,  # Named factory
-                lambda cfg, dev: remote.Remote(  # Lambda factory
+                lambda cfg, dev: remote.Remote(  # noqa: ARG005
                     f"remote.{cfg.identifier}",
                     f"{cfg.name} Remote",
                     features=[],
@@ -325,7 +325,7 @@ class TestFactoryPattern:
     def test_empty_factory_list(self):
         """Test factory that returns empty list."""
 
-        def create_nothing(cfg, dev):
+        def create_nothing(cfg, dev):  # noqa: ARG001
             return []
 
         class EmptyDriver(BaseIntegrationDriver):
@@ -351,7 +351,7 @@ class TestFactoryPattern:
         """Test that classes are correctly distinguished from factory functions."""
 
         class EntityClass(media_player.MediaPlayer):
-            def __init__(self, cfg, dev):
+            def __init__(self, cfg, dev):  # noqa: ARG002
                 super().__init__(
                     f"media_player.{cfg.identifier}_class",
                     f"{cfg.name} Class",
@@ -361,7 +361,7 @@ class TestFactoryPattern:
                     },
                 )
 
-        def entity_factory(cfg, dev):
+        def entity_factory(cfg, dev):  # noqa: ARG001
             return media_player.MediaPlayer(
                 f"media_player.{cfg.identifier}_factory",
                 f"{cfg.name} Factory",
@@ -401,7 +401,7 @@ class TestFactoryPattern:
             has_sensors: bool = True
             sensor_count: int = 2
 
-        def create_conditional_sensors(cfg, dev):
+        def create_conditional_sensors(cfg, dev):  # noqa: ARG001
             if not cfg.has_sensors:
                 return []
             return [

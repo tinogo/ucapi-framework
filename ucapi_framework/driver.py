@@ -10,7 +10,7 @@ Provides common event handlers and device lifecycle management.
 import asyncio
 import logging
 from collections.abc import Callable
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
 import ucapi
 import ucapi.api as uc
@@ -1017,6 +1017,9 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
         # Check if this entity inherits from our framework Entity ABC
         # If so, use its custom methods for state mapping and attribute updates
         has_custom_behavior = isinstance(configured_entity, FrameworkEntity)
+        framework_entity = (
+            cast(FrameworkEntity, configured_entity) if has_custom_behavior else None
+        )
 
         attributes: dict[str, Any] = {}
 
@@ -1025,8 +1028,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                 # Button entities: STATE
                 if button.Attributes.STATE.value in update:
                     state_value = update[button.Attributes.STATE.value]
-                    if has_custom_behavior:
-                        state = configured_entity.map_entity_states(state_value)
+                    if has_custom_behavior and framework_entity:
+                        state = framework_entity.map_entity_states(state_value)
                     else:
                         state = self.map_device_state(state_value)
                     attributes[button.Attributes.STATE] = state
@@ -1046,8 +1049,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                         value = update[attr.value]
                         # Apply state mapping for STATE attribute
                         if attr == climate.Attributes.STATE:
-                            if has_custom_behavior:
-                                value = configured_entity.map_entity_states(value)
+                            if has_custom_behavior and framework_entity:
+                                value = framework_entity.map_entity_states(value)
                             else:
                                 value = self.map_device_state(value)
                         attributes[attr] = value
@@ -1063,8 +1066,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                         value = update[attr.value]
                         # Apply state mapping for STATE attribute
                         if attr == cover.Attributes.STATE:
-                            if has_custom_behavior:
-                                value = configured_entity.map_entity_states(value)
+                            if has_custom_behavior and framework_entity:
+                                value = framework_entity.map_entity_states(value)
                             else:
                                 value = self.map_device_state(value)
                         attributes[attr] = value
@@ -1082,8 +1085,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                         value = update[attr.value]
                         # Apply state mapping for STATE attribute
                         if attr == light.Attributes.STATE:
-                            if has_custom_behavior:
-                                value = configured_entity.map_entity_states(value)
+                            if has_custom_behavior and framework_entity:
+                                value = framework_entity.map_entity_states(value)
                             else:
                                 value = self.map_device_state(value)
                         attributes[attr] = value
@@ -1098,8 +1101,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                 state_value = None
                 if media_player.Attributes.STATE.value in update:
                     raw_state = update[media_player.Attributes.STATE.value]
-                    if has_custom_behavior:
-                        state_value = configured_entity.map_entity_states(raw_state)
+                    if has_custom_behavior and framework_entity:
+                        state_value = framework_entity.map_entity_states(raw_state)
                     else:
                         state_value = self.map_device_state(raw_state)
                     attributes[media_player.Attributes.STATE] = state_value
@@ -1143,8 +1146,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                 # Remote entities: STATE
                 if remote.Attributes.STATE.value in update:
                     state_value = update[remote.Attributes.STATE.value]
-                    if has_custom_behavior:
-                        state = configured_entity.map_entity_states(state_value)
+                    if has_custom_behavior and framework_entity:
+                        state = framework_entity.map_entity_states(state_value)
                     else:
                         state = self.map_device_state(state_value)
                     attributes[remote.Attributes.STATE] = state
@@ -1160,8 +1163,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                         value = update[attr.value]
                         # Apply state mapping for STATE attribute
                         if attr == sensor.Attributes.STATE:
-                            if has_custom_behavior:
-                                value = configured_entity.map_entity_states(value)
+                            if has_custom_behavior and framework_entity:
+                                value = framework_entity.map_entity_states(value)
                             else:
                                 value = self.map_device_state(value)
                         attributes[attr] = value
@@ -1170,8 +1173,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                 # Switch entities: STATE
                 if switch.Attributes.STATE.value in update:
                     state_value = update[switch.Attributes.STATE.value]
-                    if has_custom_behavior:
-                        state = configured_entity.map_entity_states(state_value)
+                    if has_custom_behavior and framework_entity:
+                        state = framework_entity.map_entity_states(state_value)
                     else:
                         state = self.map_device_state(state_value)
                     attributes[switch.Attributes.STATE] = state
@@ -1180,8 +1183,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                 # IR Emitter entities: STATE (Shares same state mapping as Remote)
                 if remote.Attributes.STATE.value in update:
                     state_value = update[remote.Attributes.STATE.value]
-                    if has_custom_behavior:
-                        state = configured_entity.map_entity_states(state_value)
+                    if has_custom_behavior and framework_entity:
+                        state = framework_entity.map_entity_states(state_value)
                     else:
                         state = self.map_device_state(state_value)
                     attributes[remote.Attributes.STATE] = state
@@ -1190,8 +1193,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                 # Voice Assistant entities: STATE
                 if voice_assistant.Attributes.STATE.value in update:
                     state_value = update[voice_assistant.Attributes.STATE.value]
-                    if has_custom_behavior:
-                        state = configured_entity.map_entity_states(state_value)
+                    if has_custom_behavior and framework_entity:
+                        state = framework_entity.map_entity_states(state_value)
                     else:
                         state = self.map_device_state(state_value)
                     attributes[voice_assistant.Attributes.STATE] = state
@@ -1208,18 +1211,18 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
         # Update entity attributes if any were found
         if attributes:
             if self.api.configured_entities.contains(entity_id):
-                if has_custom_behavior:
+                if has_custom_behavior and framework_entity:
                     # Use framework entity's update method which handles filtering
-                    configured_entity.update_attributes(attributes)
+                    framework_entity.update_attributes(attributes)
                 else:
                     # Use direct API update for standard entities
                     self.api.configured_entities.update_attributes(
                         entity_id, attributes
                     )
             elif self.api.available_entities.contains(entity_id):
-                if has_custom_behavior:
+                if has_custom_behavior and framework_entity:
                     # Use framework entity's update method which handles filtering
-                    configured_entity.update_attributes(attributes)
+                    framework_entity.update_attributes(attributes)
                 else:
                     # Use direct API update for standard entities
                     self.api.available_entities.update_attributes(entity_id, attributes)
@@ -1318,12 +1321,17 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
 
         DEFAULT IMPLEMENTATION: Creates one instance per entity class/factory passed to __init__.
         Supports both entity classes and factory functions:
-        - Classes are called as: entity_class(device_config, device)
-        - Factories are called as: factory(device_config, device) and can return Entity | list[Entity]
+        - Classes are called as: entity_class(device_config, device, api=self.api)
+        - Factories are called as: factory(device_config, device, api=self.api) and can return Entity | list[Entity]
+
+        The api parameter is passed via **kwargs, so:
+        - Entity classes that inherit from framework Entity will receive it automatically
+        - Standard ucapi entities (that don't use **kwargs) will ignore it
+        - Factory functions can accept **kwargs to be forward-compatible
 
         This works automatically for simple integrations. Override this method only when you need:
         - Complex conditional logic that can't be expressed in a factory function
-        - Custom parameters beyond (device_config, device)
+        - Custom parameters beyond (device_config, device, api)
         - Special initialization sequences
 
         **Using Factory Functions** (recommended for most multi-entity patterns):
@@ -1335,8 +1343,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                 entity_classes=[
                     LyngdorfMediaPlayer,
                     LyngdorfRemote,
-                    lambda cfg, dev: [
-                        LyngdorfSensor(cfg, dev, sensor_config)
+                    lambda cfg, dev, **kwargs: [
+                        LyngdorfSensor(cfg, dev, sensor_config, **kwargs)
                         for sensor_config in SENSOR_TYPES
                     ]
                 ]
@@ -1347,12 +1355,12 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
             super().__init__(
                 device_class=LutronHub,
                 entity_classes=[
-                    lambda cfg, dev: [
-                        LutronLight(cfg, dev, light)
+                    lambda cfg, dev, **kwargs: [
+                        LutronLight(cfg, dev, light, **kwargs)
                         for light in dev.lights
                     ],
-                    lambda cfg, dev: [
-                        LutronButton(cfg, dev, scene)
+                    lambda cfg, dev, **kwargs: [
+                        LutronButton(cfg, dev, scene, **kwargs)
                         for scene in dev.scenes
                     ]
                 ],
@@ -1394,15 +1402,22 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
         entities = []
         for item in self._entity_classes:
             if callable(item) and not isinstance(item, type):
-                # It's a factory function - call it and handle the result
+                # Factory function: call it and collect results
                 result = item(device_config, device)
-                if isinstance(result, list):
-                    entities.extend(result)
-                else:
-                    entities.append(result)
+                # Normalize to list for uniform processing
+                result_list = result if isinstance(result, list) else [result]
+                # Set _api on entities that inherit from Entity ABC
+                for entity in result_list:
+                    if isinstance(entity, Entity):
+                        entity._api = self.api  # type: ignore[misc]
+                entities.extend(result_list)
             else:
-                # It's an entity class - instantiate it
-                entities.append(item(device_config, device))
+                # Entity class: instantiate it
+                entity = item(device_config, device)
+                # Set _api if entity inherits from Entity ABC
+                if isinstance(entity, Entity):
+                    entity._api = self.api  # type: ignore[misc]
+                entities.append(entity)
         return entities
 
     def map_device_state(self, device_state: Any) -> media_player.States:

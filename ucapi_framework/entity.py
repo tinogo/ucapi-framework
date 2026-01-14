@@ -61,40 +61,30 @@ class Entity(ABC):
     attribute updates. Entities inheriting from this class will automatically
     use their custom methods when the driver processes updates.
 
-    The _api and _entity_id attributes are set automatically by accessing
-    the entity's properties inherited from ucapi.Entity (id and parent API).
+    **Usage Pattern** (no Entity.__init__() call needed):
 
-    Example:
         class MyMediaPlayer(MediaPlayer, Entity):
-            def __init__(self, entity_id, name, features, attributes, cmd_handler):
-                super().__init__(entity_id, name, features, attributes, cmd_handler=cmd_handler)
+            def __init__(self, device_config: MyConfigDevice, device: MyDevice):
+                entity_id = self.create_entity_id(device.id, "media_player")
+                MediaPlayer.__init__(self, entity_id, device.name, features, attributes)
+                # No need to call Entity.__init__() - framework sets self._api automatically!
 
             def map_entity_states(self, device_state):
                 # Custom state mapping for this specific entity
                 if device_state == "STREAM":
                     return media_player.States.PLAYING
                 return super().map_entity_states(device_state)
+
+    The framework automatically sets `self._api` after entity construction.
+    No initialization or kwargs handling required - just inherit and use the methods!
     """
 
-    def __init__(self):
-        """Initialize the Entity ABC (called automatically via MRO)."""
-        self._api: IntegrationAPI | None = None
-        self._entity_id: str | None = None
+    # Note: No __init__ method needed!
+    # The framework automatically sets self._api after entity construction.
+    # Developers can inherit from Entity without calling any init methods.
 
-    @property
-    def _entity_api(self) -> IntegrationAPI:
-        """Get the IntegrationAPI instance (lazy initialization from ucapi.Entity parent)."""
-        if self._api is None:
-            # Access the api from the ucapi.Entity parent class
-            # The entity will have been added to available_entities or configured_entities
-            if hasattr(self, "_integration_api"):
-                self._api = self._integration_api  # type: ignore[assignment]
-            else:
-                raise RuntimeError(
-                    "Entity API not available. Ensure entity is properly initialized "
-                    "and added to the integration before using framework methods."
-                )
-        return self._api  # type: ignore[return-value]
+    _api: IntegrationAPI
+    _entity_id: str | None = None
 
     @property
     def _framework_entity_id(self) -> str:
@@ -122,7 +112,7 @@ class Entity(ABC):
             attributes = self.filter_changed_attributes(update)
 
         if attributes:
-            self._entity_api.configured_entities.update_attributes(
+            self._api.configured_entities.update_attributes(
                 self._framework_entity_id, attributes
             )
 
@@ -137,9 +127,7 @@ class Entity(ABC):
         :param update: dictionary containing the updated properties.
         :return: dictionary containing only the changed attributes.
         """
-        configured_entity = self._entity_api.configured_entities.get(
-            self._framework_entity_id
-        )
+        configured_entity = self._api.configured_entities.get(self._framework_entity_id)
         if not configured_entity:
             # Entity not found, return all attributes
             return update
