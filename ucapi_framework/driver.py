@@ -10,6 +10,7 @@ Provides common event handlers and device lifecycle management.
 import asyncio
 import logging
 from abc import ABC
+from collections.abc import Callable
 from typing import Any, Generic, TypeVar
 
 import ucapi
@@ -122,7 +123,10 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
     def __init__(
         self,
         device_class: type[DeviceT],
-        entity_classes: list[type[Entity]] | type[Entity],
+        entity_classes: list[
+            type[Entity] | Callable[[ConfigT, DeviceT], Entity | list[Entity]]
+        ]
+        | type[Entity],
         require_connection_before_registry: bool = False,
         loop: asyncio.AbstractEventLoop | None = None,
         driver_id: str | None = None,
@@ -1313,25 +1317,66 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         """
         Create entity instances for a device.
 
-        DEFAULT IMPLEMENTATION: Creates one instance per entity class passed to __init__,
-        calling each as: entity_class(device_config, device)
+        DEFAULT IMPLEMENTATION: Creates one instance per entity class/factory passed to __init__.
+        Supports both entity classes and factory functions:
+        - Classes are called as: entity_class(device_config, device)
+        - Factories are called as: factory(device_config, device) and can return Entity | list[Entity]
 
         This works automatically for simple integrations. Override this method only when you need:
-        - Variable entity counts (e.g., multi-zone receivers)
-        - Hub-based discovery with runtime entity creation
-        - Conditional entity creation based on device capabilities
+        - Complex conditional logic that can't be expressed in a factory function
         - Custom parameters beyond (device_config, device)
+        - Special initialization sequences
 
-        Example - Multi-zone receiver:
+        **Using Factory Functions** (recommended for most multi-entity patterns):
+
+        Example - Static sensor list (Lyngdorf pattern):
+            # In your integration driver __init__:
+            super().__init__(
+                device_class=LyngdorfDevice,
+                entity_classes=[
+                    LyngdorfMediaPlayer,
+                    LyngdorfRemote,
+                    lambda cfg, dev: [
+                        LyngdorfSensor(cfg, dev, sensor_config)
+                        for sensor_config in SENSOR_TYPES
+                    ]
+                ]
+            )
+
+        Example - Hub-based discovery (Lutron pattern):
+            # In your integration driver __init__:
+            super().__init__(
+                device_class=LutronHub,
+                entity_classes=[
+                    lambda cfg, dev: [
+                        LutronLight(cfg, dev, light)
+                        for light in dev.lights
+                    ],
+                    lambda cfg, dev: [
+                        LutronButton(cfg, dev, scene)
+                        for scene in dev.scenes
+                    ]
+                ],
+                require_connection_before_registry=True
+            )
+
+        **Override Method** (for complex cases):
+
+        Example - Multi-zone receiver with custom logic:
             def create_entities(self, device_config, device):
                 entities = []
                 for zone in device_config.zones:
-                    entities.append(AnthemMediaPlayer(
-                        entity_id=f"media_player.{device_config.id}_zone_{zone.id}",
-                        device=device,
-                        device_config=device_config,
-                        zone_config=zone  # Custom parameter
-                    ))
+                    if zone.enabled:
+                        entities.append(AnthemMediaPlayer(
+                            entity_id=create_entity_id(
+                                EntityTypes.MEDIA_PLAYER,
+                                device_config.id,
+                                f"zone_{zone.id}"
+                            ),
+                            device=device,
+                            device_config=device_config,
+                            zone_config=zone  # Custom parameter
+                        ))
                 return entities
 
         Example - Conditional creation:
@@ -1347,10 +1392,19 @@ class BaseIntegrationDriver(ABC, Generic[DeviceT, ConfigT]):
         :param device: Device instance
         :return: List of entity instances (MediaPlayer, Remote, etc.)
         """
-        # Default: instantiate from entity_classes
-        return [
-            entity_class(device_config, device) for entity_class in self._entity_classes
-        ]
+        entities = []
+        for item in self._entity_classes:
+            if callable(item) and not isinstance(item, type):
+                # It's a factory function - call it and handle the result
+                result = item(device_config, device)
+                if isinstance(result, list):
+                    entities.extend(result)
+                else:
+                    entities.append(result)
+            else:
+                # It's an entity class - instantiate it
+                entities.append(item(device_config, device))
+        return entities
 
     def map_device_state(self, device_state: Any) -> media_player.States:
         """
