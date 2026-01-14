@@ -382,21 +382,20 @@ class MyDriver(BaseIntegrationDriver):
         return entities
 ```
 
-### New Pattern (Factory Function)
+### New Pattern (Factory Function in Constructor)
 
 ```python
-class MyDriver(BaseIntegrationDriver):
-    def __init__(self):
-        super().__init__(
-            device_class=MyDevice,
-            entity_classes=[
-                lambda cfg, dev: [
-                    MyMediaPlayer(cfg, dev, zone)
-                    for zone in cfg.zones
-                    if zone.enabled
-                ]
-            ]
-        )
+# In main function - no custom driver class needed!
+driver = BaseIntegrationDriver(
+    device_class=MyDevice,
+    entity_classes=[
+        lambda cfg, dev: [
+            MyMediaPlayer(cfg, dev, zone)
+            for zone in cfg.zones
+            if zone.enabled
+        ]
+    ]
+)
 ```
 
 ### When to Still Override
@@ -406,6 +405,8 @@ Override `create_entities()` only for complex cases that can't be expressed in a
 - Custom parameters beyond `(device_config, device)`
 - Complex initialization sequences
 - Special error handling during entity creation
+
+For most cases, use the factory function pattern in the driver constructor.
 
 ## Best Practices
 
