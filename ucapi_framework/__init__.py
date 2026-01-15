@@ -48,6 +48,14 @@ from .migration import (
 )
 from .helpers import (
     find_orphaned_entities,
+    ButtonAttributes,
+    ClimateAttributes,
+    CoverAttributes,
+    LightAttributes,
+    MediaPlayerAttributes,
+    RemoteAttributes,
+    SensorAttributes,
+    SwitchAttributes,
 )
 
 __all__ = [
@@ -77,6 +85,14 @@ __all__ = [
     "verify_migration",
     "find_orphaned_entities",
     "create_entity_id",
+    "ButtonAttributes",
+    "ClimateAttributes",
+    "CoverAttributes",
+    "LightAttributes",
+    "MediaPlayerAttributes",
+    "RemoteAttributes",
+    "SensorAttributes",
+    "SwitchAttributes",
 ]
 
 __version__ = "1.4.0b2"
