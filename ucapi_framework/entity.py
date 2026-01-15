@@ -6,6 +6,7 @@ Common entity interface for UC API integrations.
 """
 
 from abc import ABC
+from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from ucapi import IntegrationAPI, media_player
@@ -61,30 +62,62 @@ class Entity(ABC):
     attribute updates. Entities inheriting from this class will automatically
     use their custom methods when the driver processes updates.
 
-    **Usage Pattern** (no Entity.__init__() call needed):
+    **Usage Pattern**:
 
-        class MyMediaPlayer(MediaPlayer, Entity):
-            def __init__(self, device_config: MyConfigDevice, device: MyDevice):
-                entity_id = self.create_entity_id(device.id, "media_player")
-                MediaPlayer.__init__(self, entity_id, device.name, features, attributes)
-                # No need to call Entity.__init__() - framework sets self._api automatically!
+        from dataclasses import dataclass
+        from ucapi import media_player
+        from ucapi_framework import Entity
 
-            def map_entity_states(self, device_state):
-                # Custom state mapping for this specific entity
-                if device_state == "STREAM":
-                    return media_player.States.PLAYING
-                return super().map_entity_states(device_state)
+        @dataclass
+        class MediaPlayerAttributes:
+            STATE: media_player.States = media_player.States.UNKNOWN
+            VOLUME: int = 0
+            MUTED: bool = False
+
+        class MyMediaPlayer(media_player.MediaPlayer, Entity):
+            def __init__(self, device_config, device):
+                # Initialize ucapi entity
+                entity_id = create_entity_id(device.id, "media_player")
+                media_player.MediaPlayer.__init__(
+                    self, entity_id, device.name, features, attributes
+                )
+
+                # Framework sets self._api automatically after construction
+                self._device = device
+
+                # Create attributes dataclass for easy state management
+                self.attrs = MediaPlayerAttributes()
+
+            def sync_from_device(self):
+                \"\"\"Map device state to entity attributes.\"\"\"
+                self.attrs.STATE = self.map_entity_states(self._device.state)
+                self.attrs.VOLUME = self._device.volume
+                self.attrs.MUTED = self._device.is_muted
+
+            async def handle_command(self, entity_id, cmd_id, params):
+                \"\"\"Handle commands and sync state.\"\"\"
+                if cmd_id == media_player.Commands.ON:
+                    await self._device.turn_on()
+                    self.sync_from_device()
+                    self.update_from_dataclass(self.attrs)  # Auto-filters changes!
 
     The framework automatically sets `self._api` after entity construction.
-    No initialization or kwargs handling required - just inherit and use the methods!
     """
 
-    # Note: No __init__ method needed!
-    # The framework automatically sets self._api after entity construction.
-    # Developers can inherit from Entity without calling any init methods.
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """
+        Initialize the Entity with cooperative multiple inheritance support.
+
+        This uses *args/**kwargs to support MRO chain traversal when Entity
+        is mixed with ucapi entity classes that have their own __init__ signatures.
+        """
+        # Pass all args/kwargs up the MRO chain (to ucapi.Entity or others)
+        super().__init__(*args, **kwargs)
+
+        # Initialize framework-specific attributes
+        self._entity_id: str | None = None
 
     _api: IntegrationAPI
-    _entity_id: str | None = None
 
     @property
     def _framework_entity_id(self) -> str:
@@ -115,6 +148,48 @@ class Entity(ABC):
             self._api.configured_entities.update_attributes(
                 self._framework_entity_id, attributes
             )
+
+    def update(self, attributes: Any, *, force: bool = False) -> None:
+        """
+        Update entity attributes from a dataclass instance.
+
+        Converts the dataclass to a dictionary and updates entity attributes,
+        automatically filtering out unchanged values (unless force=True).
+        Attributes with None values are excluded from the update.
+
+        Args:
+            attributes: A dataclass instance containing entity attributes.
+            force: If True, update all attributes even if unchanged. Default False.
+
+        Raises:
+            TypeError: If attributes is not a dataclass instance.
+
+        Example:
+            ```python
+            from dataclasses import dataclass
+            from ucapi import media_player
+
+            @dataclass
+            class MediaPlayerAttributes:
+                STATE: media_player.States | None = None
+                VOLUME: int | None = None
+
+            # In your device
+            self.attrs = MediaPlayerAttributes(
+                STATE=media_player.States.PLAYING,
+                VOLUME=50
+            )
+
+            # In your entity
+            self.update(self._device.attrs)
+            ```
+        """
+        if not is_dataclass(attributes):
+            msg = f"Expected a dataclass instance, got {type(attributes).__name__}"
+            raise TypeError(msg)
+
+        attrs = {k: v for k, v in asdict(attributes).items() if v is not None}
+        self.update_attributes(attrs, force=force)
 
     def filter_changed_attributes(self, update: dict[str, Any]) -> dict[str, Any]:
         """
