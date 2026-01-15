@@ -297,12 +297,12 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
         - Calls refresh_entity_state() for each entity
 
         **Hub-based integrations** (require_connection_before_registry=True):
-        - If device not configured: adds device, connects, then calls async_register_available_entities()
-        - If device configured but not connected: connects with retries, then calls async_register_available_entities()
+        - If device not configured: adds device, connects, then creates entities using factory functions
+        - If device configured but not connected: connects with retries, then creates entities
+        - Factory functions in entity_classes can access device.lights, device.scenes, etc.
         - Calls refresh_entity_state() for each entity
 
         Override refresh_entity_state() for custom state refresh logic.
-        Override async_register_available_entities() for hub-based entity population.
 
         :param entity_ids: List of entity identifiers being subscribed
         """
@@ -691,40 +691,36 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
         Register available entities for a device (async version).
 
         **For hub-based integrations** (require_connection_before_registry=True):
-        Override this method to populate entities that are discovered from the hub
-        after connection. This is called after a successful device connection.
 
-        Default implementation:
-        - If require_connection_before_registry=True: logs a warning that you should
-          override this method, then falls back to register_available_entities()
-        - If require_connection_before_registry=False: calls register_available_entities()
+        With the factory function pattern in entity_classes, you typically don't need to
+        override this method. Instead, use factory functions that access device data:
 
-        Example for hub-based integration:
-            async def async_register_available_entities(
-                self, device_config: ConfigT, device: DeviceT
-            ) -> None:
-                # Query hub for available devices/entities
-                for light in device.lights:
-                    entity = ucapi.light.Light(
-                        identifier=f"{device.device_id}-light-{light.device_id}",
-                        name=light.name,
-                        features=[...],
-                        cmd_handler=...
-                    )
-                    if not self.api.available_entities.contains(entity.id):
-                        self.api.available_entities.add(entity)
+        Example (recommended approach):
+            # In main function:
+            driver = BaseIntegrationDriver(
+                device_class=MyHub,
+                entity_classes=[
+                    lambda cfg, dev: [
+                        MyLight(cfg, dev, light)
+                        for light in dev.lights  # Populated during connection
+                    ],
+                    lambda cfg, dev: [
+                        MyScene(cfg, dev, scene)
+                        for scene in dev.scenes  # Populated during connection
+                    ]
+                ],
+                require_connection_before_registry=True
+            )
+
+        Override this method only if you need custom entity registration logic that
+        can't be expressed in factory functions (rare cases).
+
+        Default implementation: calls register_available_entities() which uses
+        create_entities() with your factory functions.
 
         :param device_config: Device configuration
         :param device: Device instance
         """
-        if self._require_connection_before_registry:
-            _LOG.warning(
-                "async_register_available_entities() called but not overridden. "
-                "When using require_connection_before_registry=True, you should "
-                "override this method to register entities discovered from the hub. "
-                "Falling back to synchronous register_available_entities()."
-            )
-
         self.register_available_entities(device_config, device)
 
     def _add_device_instance(self, device_config: ConfigT) -> DeviceT:
@@ -1321,46 +1317,45 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
 
         DEFAULT IMPLEMENTATION: Creates one instance per entity class/factory passed to __init__.
         Supports both entity classes and factory functions:
-        - Classes are called as: entity_class(device_config, device, api=self.api)
-        - Factories are called as: factory(device_config, device, api=self.api) and can return Entity | list[Entity]
+        - Classes are called as: entity_class(device_config, device)
+        - Factories are called as: factory(device_config, device) and can return Entity | list[Entity]
 
-        The api parameter is passed via **kwargs, so:
-        - Entity classes that inherit from framework Entity will receive it automatically
-        - Standard ucapi entities (that don't use **kwargs) will ignore it
-        - Factory functions can accept **kwargs to be forward-compatible
+        After entity creation, the framework automatically sets entity._api = self.api for
+        entities that inherit from the framework Entity ABC. This gives entities access to
+        the API without requiring it as a constructor parameter.
 
         This works automatically for simple integrations. Override this method only when you need:
         - Complex conditional logic that can't be expressed in a factory function
-        - Custom parameters beyond (device_config, device, api)
+        - Custom parameters beyond (device_config, device)
         - Special initialization sequences
 
         **Using Factory Functions** (recommended for most multi-entity patterns):
 
-        Example - Static sensor list (Lyngdorf pattern):
-            # In your integration driver __init__:
-            super().__init__(
-                device_class=LyngdorfDevice,
+        Example - Static sensor list:
+            # In main function or driver __init__:
+            driver = BaseIntegrationDriver(
+                device_class=MyDevice,
                 entity_classes=[
-                    LyngdorfMediaPlayer,
-                    LyngdorfRemote,
-                    lambda cfg, dev, **kwargs: [
-                        LyngdorfSensor(cfg, dev, sensor_config, **kwargs)
+                    MyMediaPlayer,
+                    MyRemote,
+                    lambda cfg, dev: [
+                        MySensor(cfg, dev, sensor_config)
                         for sensor_config in SENSOR_TYPES
                     ]
                 ]
             )
 
-        Example - Hub-based discovery (Lutron pattern):
-            # In your integration driver __init__:
-            super().__init__(
-                device_class=LutronHub,
+        Example - Hub-based discovery:
+            # In main function or driver __init__:
+            driver = BaseIntegrationDriver(
+                device_class=MyHub,
                 entity_classes=[
-                    lambda cfg, dev, **kwargs: [
-                        LutronLight(cfg, dev, light, **kwargs)
+                    lambda cfg, dev: [
+                        MyLight(cfg, dev, light)
                         for light in dev.lights
                     ],
-                    lambda cfg, dev, **kwargs: [
-                        LutronButton(cfg, dev, scene, **kwargs)
+                    lambda cfg, dev: [
+                        MyButton(cfg, dev, scene)
                         for scene in dev.scenes
                     ]
                 ],
