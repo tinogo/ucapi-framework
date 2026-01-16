@@ -122,15 +122,18 @@ class Entity(ABC):
     @property
     def _framework_entity_id(self) -> str:
         """Get the entity ID (lazy initialization from ucapi.Entity parent)."""
-        if self._entity_id is None:
+        # Use getattr to handle case where __init__ wasn't called due to MRO
+        entity_id = getattr(self, "_entity_id", None)
+        if entity_id is None:
             # Access the id from the ucapi.Entity parent class
             if hasattr(self, "id"):
                 self._entity_id = self.id  # type: ignore[assignment]
+                return self._entity_id  # type: ignore[return-value]
             else:
                 raise RuntimeError(
                     "Entity ID not available. Ensure entity is properly initialized."
                 )
-        return self._entity_id  # type: ignore[return-value]
+        return entity_id  # type: ignore[return-value]
 
     def update_attributes(self, update: dict[str, Any], *, force: bool = False) -> None:
         """

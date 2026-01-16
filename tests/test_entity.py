@@ -12,8 +12,7 @@ class TestMediaPlayer(media_player.MediaPlayer, Entity):
     """Test media player with Entity ABC."""
 
     def __init__(self, entity_id, name):
-        media_player.MediaPlayer.__init__(
-            self,
+        super().__init__(
             entity_id,
             name,
             features=[media_player.Features.ON_OFF],
@@ -25,8 +24,7 @@ class CustomStateMediaPlayer(media_player.MediaPlayer, Entity):
     """Media player with custom state mapping."""
 
     def __init__(self, entity_id, name):
-        media_player.MediaPlayer.__init__(
-            self,
+        super().__init__(
             entity_id,
             name,
             features=[media_player.Features.ON_OFF],
@@ -46,8 +44,7 @@ class TestSensor(sensor.Sensor, Entity):
     """Test sensor with Entity ABC."""
 
     def __init__(self, entity_id, name):
-        sensor.Sensor.__init__(
-            self,
+        super().__init__(
             entity_id,
             name,
             features=[],
