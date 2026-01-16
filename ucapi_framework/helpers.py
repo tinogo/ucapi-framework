@@ -26,7 +26,7 @@ _LOG = logging.getLogger(__name__)
 class EntityAttributes:
     """
     Base class for entity attribute containers.
-    
+
     All entity attribute dataclasses inherit from this to provide a common
     type for type hints and enable polymorphic usage.
     """

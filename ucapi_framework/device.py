@@ -157,7 +157,9 @@ class BaseDeviceInterface(ABC):
         """Return the current device state."""
         return self._state
 
-    def get_device_attributes(self, entity_id: str) -> dict[str, Any] | EntityAttributes:
+    def get_device_attributes(
+        self, entity_id: str
+    ) -> dict[str, Any] | EntityAttributes:
         """
         Provide entity-specific attributes beyond STATE.
 
