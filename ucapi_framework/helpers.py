@@ -23,14 +23,26 @@ _LOG = logging.getLogger(__name__)
 
 
 @dataclass
-class ButtonAttributes:
+class EntityAttributes:
+    """
+    Base class for entity attribute containers.
+    
+    All entity attribute dataclasses inherit from this to provide a common
+    type for type hints and enable polymorphic usage.
+    """
+
+    STATE: Any | None = None
+
+
+@dataclass
+class ButtonAttributes(EntityAttributes):
     """Attribute container for Button entities."""
 
     STATE: button.States | None = None
 
 
 @dataclass
-class ClimateAttributes:
+class ClimateAttributes(EntityAttributes):
     """Attribute container for Climate entities."""
 
     STATE: climate.States | None = None
@@ -42,7 +54,7 @@ class ClimateAttributes:
 
 
 @dataclass
-class CoverAttributes:
+class CoverAttributes(EntityAttributes):
     """Attribute container for Cover entities."""
 
     STATE: cover.States | None = None
@@ -51,7 +63,7 @@ class CoverAttributes:
 
 
 @dataclass
-class LightAttributes:
+class LightAttributes(EntityAttributes):
     """Attribute container for Light entities."""
 
     STATE: light.States | None = None
@@ -62,7 +74,7 @@ class LightAttributes:
 
 
 @dataclass
-class MediaPlayerAttributes:
+class MediaPlayerAttributes(EntityAttributes):
     """Attribute container for MediaPlayer entities."""
 
     STATE: media_player.States | None = None
@@ -85,14 +97,14 @@ class MediaPlayerAttributes:
 
 
 @dataclass
-class RemoteAttributes:
+class RemoteAttributes(EntityAttributes):
     """Attribute container for Remote entities."""
 
     STATE: remote.States | None = None
 
 
 @dataclass
-class SensorAttributes:
+class SensorAttributes(EntityAttributes):
     """Attribute container for Sensor entities."""
 
     STATE: sensor.States | None = None
@@ -101,7 +113,7 @@ class SensorAttributes:
 
 
 @dataclass
-class SwitchAttributes:
+class SwitchAttributes(EntityAttributes):
     """Attribute container for Switch entities."""
 
     STATE: switch.States | None = None

@@ -11,6 +11,8 @@ from typing import Any
 
 from ucapi import IntegrationAPI, media_player
 
+from .helpers import EntityAttributes
+
 
 def map_state_to_media_player(device_state: Any) -> media_player.States:
     """
@@ -152,7 +154,7 @@ class Entity(ABC):
                 self._framework_entity_id, attributes
             )
 
-    def update(self, attributes: Any, *, force: bool = False) -> None:
+    def update(self, attributes: EntityAttributes, *, force: bool = False) -> None:
         """
         Update entity attributes from a dataclass instance.
 
@@ -161,7 +163,7 @@ class Entity(ABC):
         Attributes with None values are excluded from the update.
 
         Args:
-            attributes: A dataclass instance containing entity attributes.
+            attributes: An EntityAttributes dataclass instance (e.g., MediaPlayerAttributes).
             force: If True, update all attributes even if unchanged. Default False.
 
         Raises:
@@ -169,13 +171,8 @@ class Entity(ABC):
 
         Example:
             ```python
-            from dataclasses import dataclass
+            from ucapi_framework import MediaPlayerAttributes
             from ucapi import media_player
-
-            @dataclass
-            class MediaPlayerAttributes:
-                STATE: media_player.States | None = None
-                VOLUME: int | None = None
 
             # In your device
             self.attrs = MediaPlayerAttributes(
