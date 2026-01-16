@@ -10,6 +10,7 @@ Provides common event handlers and device lifecycle management.
 import asyncio
 import logging
 from collections.abc import Callable
+from dataclasses import is_dataclass
 from typing import Any, Generic, TypeVar, cast
 
 import ucapi
@@ -454,61 +455,50 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
         """
         Refresh state for a single entity.
 
-        Default implementation: Updates STATE attribute based on device connection state.
-        For media_player entities, uses map_device_state(). For other entity types,
-        sets STATE to AVAILABLE if connected, UNAVAILABLE otherwise.
+        **Recommended Pattern**: Device implements `get_device_attributes(entity_id)` to return
+        entity-specific attributes. Can return either a dataclass or dict:
 
-        **Device Attribute Hook**: Override `get_device_attributes(entity_id)` in your device
-        class to provide additional attributes beyond STATE. The method should return a
-        dict[Attributes, Any] with entity-specific attributes (e.g., SOURCE_LIST, SOUND_MODE_LIST,
-        VOLUME, BRIGHTNESS, etc.). These will be merged with STATE before updating.
+        Example with dataclass (recommended for type safety):
+            # In your device:
+            class MyDevice(BaseDeviceInterface):
+                def __init__(self, ...):
+                    self.zone1_attrs = MediaPlayerAttributes()
+                    self.zone2_attrs = MediaPlayerAttributes()
 
-        The default implementation in BaseDeviceInterface returns an empty dict.
+                def get_device_attributes(self, entity_id: str):
+                    # Return appropriate dataclass for this entity
+                    if "zone1" in entity_id:
+                        return self.zone1_attrs
+                    elif "zone2" in entity_id:
+                        return self.zone2_attrs
 
-        Example device implementation:
+        Example with dict (simpler, less type-safe):
             def get_device_attributes(self, entity_id: str) -> dict:
                 return {
-                    media_player.Attributes.SOURCE_LIST: list(self.source_list),
-                    media_player.Attributes.SOUND_MODE_LIST: list(self.sound_mode_list),
+                    media_player.Attributes.STATE: media_player.States.PLAYING,
                     media_player.Attributes.VOLUME: self.volume,
+                    media_player.Attributes.SOURCE_LIST: list(self.sources),
                 }
 
-        **Override this** to implement integration-specific state refresh logic,
-        especially for hub-based integrations that need to query device data.
+        Example for hub-based integration with multiple lights:
+            class MyHub(BaseDeviceInterface):
+                def __init__(self, ...):
+                    self.light_attrs = {}  # Dict of entity_id -> LightAttributes
 
-        Example for hub-based integration:
-            async def refresh_entity_state(self, entity_id: str) -> None:
-                device_id = self.device_from_entity_id(entity_id)
-                device = self._configured_devices.get(device_id)
-                if not device:
-                    return
-
-                entity_type = self.entity_type_from_entity_id(entity_id)
-                sub_device_id = self.sub_device_from_entity_id(entity_id)
-
-                match entity_type:
-                    case EntityTypes.LIGHT.value:
-                        light = next(
-                            (l for l in device.lights if l.device_id == sub_device_id),
-                            None
+                async def connect(self):
+                    # Populate light attributes during connection
+                    for light in await self.discover_lights():
+                        light_id = f"light.{self.device_id}.{light.id}"
+                        self.light_attrs[light_id] = LightAttributes(
+                            STATE=light.States.ON if light.on else light.States.OFF,
+                            BRIGHTNESS=light.brightness
                         )
-                        if light:
-                            self.api.configured_entities.update_attributes(
-                                entity_id,
-                                {
-                                    "state": "ON" if light.current_state > 0 else "OFF",
-                                    "brightness": int(light.current_state * 255 / 100),
-                                }
-                            )
-                    case EntityTypes.BUTTON.value:
-                        scene = next(
-                            (s for s in device.scenes if s.scene_id == sub_entity_id),
-                            None
-                        )
-                        if scene:
-                            self.api.configured_entities.update_attributes(
-                                entity_id, {"state": "AVAILABLE"}
-                            )
+
+                def get_device_attributes(self, entity_id: str):
+                    return self.light_attrs.get(entity_id)
+
+        **Override this method** only if you need custom refresh logic that can't be
+        expressed through get_device_attributes().
 
         :param entity_id: Entity identifier
         """
@@ -526,6 +516,42 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
             _LOG.debug("Entity %s is not configured, ignoring", entity_id)
             return
 
+        # Check if entity is a framework Entity with update() method
+        has_update = isinstance(configured_entity, FrameworkEntity)
+        framework_entity = (
+            cast(FrameworkEntity, configured_entity) if has_update else None
+        )
+
+        # Try to get attributes from device
+        device_attrs = None
+        if hasattr(device, "get_device_attributes"):
+            device_attrs = device.get_device_attributes(entity_id)
+
+        # Path 1: Use entity.update() with dataclass from get_device_attributes()
+        if has_update and framework_entity and device_attrs is not None:
+            try:
+                # Check if it's a dataclass - if so, entity.update() handles it
+                if is_dataclass(device_attrs):
+                    framework_entity.update(device_attrs)
+                    return
+                # If it's a dict, use update_attributes directly
+                elif isinstance(device_attrs, dict):
+                    framework_entity.update_attributes(device_attrs)
+                    return
+            except (TypeError, AttributeError) as e:
+                _LOG.debug(
+                    "Entity %s update failed with device attributes, falling back to default: %s",
+                    entity_id,
+                    e,
+                )
+
+        # Path 2: Legacy fallback - use get_device_attributes() dict if available
+        if device_attrs and isinstance(device_attrs, dict):
+            # Update using the dict directly
+            self.api.configured_entities.update_attributes(entity_id, device_attrs)
+            return
+
+        # Path 3: Default fallback - construct minimal STATE attribute
         # Default state refresh based on device connection and entity type
         if not device.is_connected or device.state is None:
             state = media_player.States.UNAVAILABLE
@@ -537,56 +563,39 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                 # For other entity types, just mark as available
                 state = button.States.AVAILABLE
 
-        # Allow device to provide additional attributes beyond STATE
-        # Device can implement get_device_attributes(entity_id) -> dict[Attributes, Any]
         attributes = {}
-        if hasattr(device, "get_device_attributes"):
-            device_attrs = device.get_device_attributes(entity_id)
-            if device_attrs:
-                attributes.update(device_attrs)
 
         # Update the appropriate STATE attribute based on entity type
         match configured_entity.entity_type:
             case EntityTypes.BUTTON:
-                # Merge STATE with device-provided attributes (STATE takes precedence if device provided it)
-                if button.Attributes.STATE not in attributes:
-                    attributes[button.Attributes.STATE] = state
+                attributes[button.Attributes.STATE] = state
                 self.api.configured_entities.update_attributes(entity_id, attributes)
             case EntityTypes.CLIMATE:
-                if climate.Attributes.STATE not in attributes:
-                    attributes[climate.Attributes.STATE] = state
+                attributes[climate.Attributes.STATE] = state
                 self.api.configured_entities.update_attributes(entity_id, attributes)
             case EntityTypes.COVER:
-                if cover.Attributes.STATE not in attributes:
-                    attributes[cover.Attributes.STATE] = state
+                attributes[cover.Attributes.STATE] = state
                 self.api.configured_entities.update_attributes(entity_id, attributes)
             case EntityTypes.LIGHT:
-                if light.Attributes.STATE not in attributes:
-                    attributes[light.Attributes.STATE] = state
+                attributes[light.Attributes.STATE] = state
                 self.api.configured_entities.update_attributes(entity_id, attributes)
             case EntityTypes.MEDIA_PLAYER:
-                if media_player.Attributes.STATE not in attributes:
-                    attributes[media_player.Attributes.STATE] = state
+                attributes[media_player.Attributes.STATE] = state
                 self.api.configured_entities.update_attributes(entity_id, attributes)
             case EntityTypes.REMOTE:
-                if remote.Attributes.STATE not in attributes:
-                    attributes[remote.Attributes.STATE] = state
+                attributes[remote.Attributes.STATE] = state
                 self.api.configured_entities.update_attributes(entity_id, attributes)
             case EntityTypes.SENSOR:
-                if sensor.Attributes.STATE not in attributes:
-                    attributes[sensor.Attributes.STATE] = state
+                attributes[sensor.Attributes.STATE] = state
                 self.api.configured_entities.update_attributes(entity_id, attributes)
             case EntityTypes.SWITCH:
-                if switch.Attributes.STATE not in attributes:
-                    attributes[switch.Attributes.STATE] = state
+                attributes[switch.Attributes.STATE] = state
                 self.api.configured_entities.update_attributes(entity_id, attributes)
             case EntityTypes.IR_EMITTER:  # Remote shares the same states as IR Emitter
-                if remote.Attributes.STATE not in attributes:
-                    attributes[remote.Attributes.STATE] = state
+                attributes[remote.Attributes.STATE] = state
                 self.api.configured_entities.update_attributes(entity_id, attributes)
             case EntityTypes.VOICE_ASSISTANT:
-                if voice_assistant.Attributes.STATE not in attributes:
-                    attributes[voice_assistant.Attributes.STATE] = state
+                attributes[voice_assistant.Attributes.STATE] = state
                 self.api.configured_entities.update_attributes(entity_id, attributes)
 
     # ========================================================================
