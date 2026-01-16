@@ -204,6 +204,79 @@ class TestEntityABC:
             "media_player.test", update
         )
 
+    def test_update_with_dataclass(self, mock_api):
+        """Test that update() converts dataclass to dict with enum keys."""
+        from ucapi_framework import MediaPlayerAttributes
+
+        entity = TestMediaPlayer("media_player.test", "Test Player")
+        entity._api = mock_api  # noqa: SLF001
+
+        # Configure entity in mock
+        mock_api.configured_entities.get.return_value = MagicMock(
+            attributes={media_player.Attributes.STATE: media_player.States.UNKNOWN}
+        )
+
+        # Create attributes dataclass
+        attrs = MediaPlayerAttributes(
+            STATE=media_player.States.PLAYING, VOLUME=50, MUTED=False
+        )
+
+        # Update entity with dataclass
+        entity.update(attrs)
+
+        # Verify update_attributes was called
+        assert mock_api.configured_entities.update_attributes.called
+        call_args = mock_api.configured_entities.update_attributes.call_args
+
+        # Get the attributes dict that was passed
+        entity_id, attributes = call_args[0]
+        assert entity_id == "media_player.test"
+
+        # Verify keys are enum objects, not strings
+        assert media_player.Attributes.STATE in attributes
+        assert media_player.Attributes.VOLUME in attributes
+        assert media_player.Attributes.MUTED in attributes
+
+        # Verify string keys are NOT present
+        assert "STATE" not in attributes
+        assert "VOLUME" not in attributes
+        assert "MUTED" not in attributes
+
+        # Verify values
+        assert attributes[media_player.Attributes.STATE] == media_player.States.PLAYING
+        assert attributes[media_player.Attributes.VOLUME] == 50
+        assert attributes[media_player.Attributes.MUTED] is False
+
+    def test_update_filters_none_values(self, mock_api):
+        """Test that update() filters out None values from dataclass."""
+        from ucapi_framework import MediaPlayerAttributes
+
+        entity = TestMediaPlayer("media_player.test", "Test Player")
+        entity._api = mock_api  # noqa: SLF001
+
+        # Configure entity in mock
+        mock_api.configured_entities.get.return_value = MagicMock(
+            attributes={media_player.Attributes.STATE: media_player.States.UNKNOWN}
+        )
+
+        # Create attributes with only some fields set (rest are None)
+        attrs = MediaPlayerAttributes(STATE=media_player.States.PLAYING, VOLUME=50)
+
+        # Update entity
+        entity.update(attrs)
+
+        # Get the attributes dict that was passed
+        call_args = mock_api.configured_entities.update_attributes.call_args
+        _, attributes = call_args[0]
+
+        # Should only have STATE and VOLUME, not other None fields
+        assert len(attributes) == 2
+        assert media_player.Attributes.STATE in attributes
+        assert media_player.Attributes.VOLUME in attributes
+        # These should not be present (they were None)
+        assert media_player.Attributes.MUTED not in attributes
+        assert media_player.Attributes.SOURCE not in attributes
+
     def test_multiple_entity_types(self, mock_api):
         """Test that Entity ABC works with different entity types."""
         # Test with sensor

@@ -8,10 +8,32 @@ Common entity interface for UC API integrations.
 from abc import ABC
 from dataclasses import asdict, is_dataclass
 from typing import Any
-
-from ucapi import IntegrationAPI, media_player
-
+from ucapi import (
+    IntegrationAPI,
+    button,
+    climate,
+    cover,
+    light,
+    media_player,
+    remote,
+    sensor,
+    switch,
+    voice_assistant,
+)
 from .helpers import EntityAttributes
+
+# Mapping from ucapi entity classes to their Attributes enums
+_ENTITY_ATTRIBUTES_MAP = {
+    button.Button: button.Attributes,
+    climate.Climate: climate.Attributes,
+    cover.Cover: cover.Attributes,
+    light.Light: light.Attributes,
+    media_player.MediaPlayer: media_player.Attributes,
+    remote.Remote: remote.Attributes,
+    sensor.Sensor: sensor.Attributes,
+    switch.Switch: switch.Attributes,
+    voice_assistant.VoiceAssistant: voice_assistant.Attributes,
+}
 
 
 def map_state_to_media_player(device_state: Any) -> media_player.States:
@@ -188,7 +210,33 @@ class Entity(ABC):
             msg = f"Expected a dataclass instance, got {type(attributes).__name__}"
             raise TypeError(msg)
 
-        attrs = {k: v for k, v in asdict(attributes).items() if v is not None}
+        # Convert dataclass to dict and filter out None values
+        attrs_dict = {k: v for k, v in asdict(attributes).items() if v is not None}
+
+        # Convert string keys to Attribute enum objects
+        # The dataclass field names match the Attribute enum member names
+        # Walk MRO to find the first ucapi entity class and get its Attributes enum
+        attributes_enum = None
+        for base in self.__class__.__mro__:
+            if base in _ENTITY_ATTRIBUTES_MAP:
+                attributes_enum = _ENTITY_ATTRIBUTES_MAP[base]
+                break
+
+        if attributes_enum:
+            # Convert string keys to enum objects
+            attrs = {}
+            for key, value in attrs_dict.items():
+                try:
+                    # Look up the enum member by name
+                    attrs[attributes_enum[key]] = value
+                except KeyError:
+                    # If the key doesn't exist in the enum, skip it
+                    # (allows for extra fields in dataclass that aren't in ucapi)
+                    pass
+        else:
+            # Fallback: use string keys as-is (shouldn't happen for ucapi entities)
+            attrs = attrs_dict
+
         self.update_attributes(attrs, force=force)
 
     def filter_changed_attributes(self, update: dict[str, Any]) -> dict[str, Any]:

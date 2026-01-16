@@ -57,6 +57,7 @@ from .helpers import (
     RemoteAttributes,
     SensorAttributes,
     SwitchAttributes,
+    VoiceAssistantAttributes,
 )
 
 __all__ = [
@@ -95,6 +96,7 @@ __all__ = [
     "RemoteAttributes",
     "SensorAttributes",
     "SwitchAttributes",
+    "VoiceAssistantAttributes",
 ]
 
 __version__ = "1.5.0b7"

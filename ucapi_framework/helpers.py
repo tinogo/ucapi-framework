@@ -13,7 +13,17 @@ from dataclasses import dataclass
 from typing import Any
 import aiohttp
 
-from ucapi import button, climate, cover, light, media_player, remote, sensor, switch
+from ucapi import (
+    button,
+    climate,
+    cover,
+    light,
+    media_player,
+    remote,
+    sensor,
+    switch,
+    voice_assistant,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -117,6 +127,13 @@ class SwitchAttributes(EntityAttributes):
     """Attribute container for Switch entities."""
 
     STATE: switch.States | None = None
+
+
+@dataclass
+class VoiceAssistantAttributes(EntityAttributes):
+    """Attribute container for VoiceAssistant entities."""
+
+    STATE: voice_assistant.States | None = None
 
 
 # Helper Functions
