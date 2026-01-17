@@ -7,7 +7,7 @@ Common entity interface for UC API integrations.
 
 from abc import ABC
 from dataclasses import asdict, is_dataclass
-from typing import Any
+from typing import Any, cast
 from ucapi import (
     IntegrationAPI,
     button,
@@ -176,22 +176,26 @@ class Entity(ABC):
                 self._framework_entity_id, attributes
             )
 
-    def update(self, attributes: EntityAttributes, *, force: bool = False) -> None:
+    def update(
+        self, attributes: EntityAttributes | dict[str, Any], *, force: bool = False
+    ) -> None:
         """
-        Update entity attributes from a dataclass instance.
+        Update entity attributes from a dataclass or dictionary.
 
-        Converts the dataclass to a dictionary and updates entity attributes,
-        automatically filtering out unchanged values (unless force=True).
-        Attributes with None values are excluded from the update.
+        Provides a unified interface for updating entity attributes regardless of whether
+        you're using dataclasses (recommended) or plain dictionaries. When using a dataclass,
+        None values are automatically filtered out. All updates filter unchanged values
+        unless force=True.
 
         Args:
-            attributes: An EntityAttributes dataclass instance (e.g., MediaPlayerAttributes).
+            attributes: An EntityAttributes dataclass instance (e.g., MediaPlayerAttributes)
+                       or a dict of attribute key-value pairs.
             force: If True, update all attributes even if unchanged. Default False.
 
         Raises:
-            TypeError: If attributes is not a dataclass instance.
+            TypeError: If attributes is neither a dataclass nor a dict.
 
-        Example:
+        Example with dataclass (recommended):
             ```python
             from ucapi_framework import MediaPlayerAttributes
             from ucapi import media_player
@@ -202,12 +206,29 @@ class Entity(ABC):
                 VOLUME=50
             )
 
-            # In your entity
+            # In your entity - clean and simple
             self.update(self._device.attrs)
             ```
+
+        Example with dict:
+            ```python
+            from ucapi import media_player
+
+            # Also works with plain dicts
+            self.update({
+                media_player.Attributes.STATE: media_player.States.PLAYING,
+                media_player.Attributes.VOLUME: 50
+            })
+            ```
         """
+        # Handle dict directly
+        if isinstance(attributes, dict):
+            self.update_attributes(cast(dict[str, Any], attributes), force=force)
+            return
+
+        # Handle dataclass
         if not is_dataclass(attributes):
-            msg = f"Expected a dataclass instance, got {type(attributes).__name__}"
+            msg = f"Expected a dataclass or dict, got {type(attributes).__name__}"
             raise TypeError(msg)
 
         # Convert dataclass to dict and filter out None values
