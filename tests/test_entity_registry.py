@@ -291,6 +291,20 @@ class TestEntityRegistry:
         assert device.get_entity(entity2.id) is entity2
         assert device.get_entity(entity2.id) is not entity1
 
+    def test_update_entity_empty_attrs(self, device, mock_api):
+        """Test update_entity when get_device_attributes returns empty dict."""
+        entity = TestSensor(device, "temp", "Temperature")
+        entity._api = mock_api  # noqa: SLF001
+
+        # Clear sensor data so get_device_attributes returns empty
+        device.sensor_data = {}
+
+        # Update should not be called when attrs are empty
+        device.update_entity(entity.id)
+
+        # Should not call update since attrs are empty/falsy
+        assert not mock_api.configured_entities.update_attributes.called
+
 
 class TestDeviceEventsUpdate:
     """Test DeviceEvents.UPDATE documentation and usage."""

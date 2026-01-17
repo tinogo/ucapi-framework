@@ -467,3 +467,72 @@ class TestEntityABC:
         assert isinstance(SensorAttributes(), EntityAttributes)
         assert isinstance(SwitchAttributes(), EntityAttributes)
         assert isinstance(VoiceAssistantAttributes(), EntityAttributes)
+
+    def test_update_with_dict(self, mock_api):
+        """Test entity.update() with a plain dictionary."""
+        entity = TestMediaPlayer("media_player.test", "Test Player")
+        entity._api = mock_api  # noqa: SLF001
+
+        mock_api.configured_entities.get.return_value = entity
+
+        # Update with dict should work
+        entity.update(
+            {
+                media_player.Attributes.STATE: media_player.States.PLAYING,
+                media_player.Attributes.VOLUME: 50,
+            }
+        )
+
+        # Should call update_attributes
+        assert mock_api.configured_entities.update_attributes.called
+
+    def test_update_with_invalid_type(self, mock_api):
+        """Test entity.update() with invalid type raises TypeError."""
+        entity = TestMediaPlayer("media_player.test", "Test Player")
+        entity._api = mock_api  # noqa: SLF001
+
+        # Should raise TypeError for non-dataclass, non-dict
+        with pytest.raises(TypeError, match="Expected a dataclass or dict"):
+            entity.update("invalid")  # type: ignore[arg-type]
+
+        with pytest.raises(TypeError, match="Expected a dataclass or dict"):
+            entity.update(42)  # type: ignore[arg-type]
+
+    def test_update_with_extra_dataclass_fields(self, mock_api):
+        """Test update with dataclass containing fields not in ucapi Attributes enum."""
+        from dataclasses import dataclass
+        from ucapi_framework import MediaPlayerAttributes
+
+        # Create a custom dataclass with extra fields
+        @dataclass
+        class ExtendedMediaPlayerAttributes(MediaPlayerAttributes):
+            CUSTOM_FIELD: str | None = None
+
+        entity = TestMediaPlayer("media_player.test", "Test Player")
+        entity._api = mock_api  # noqa: SLF001
+        mock_api.configured_entities.get.return_value = entity
+
+        attrs = ExtendedMediaPlayerAttributes(
+            STATE=media_player.States.PLAYING, VOLUME=50, CUSTOM_FIELD="custom_value"
+        )
+
+        # Should not raise error, just skip unknown fields
+        entity.update(attrs)
+        assert mock_api.configured_entities.update_attributes.called
+
+    def test_filter_changed_attributes_entity_not_found(self, mock_api):
+        """Test filter_changed_attributes when entity not found returns all attributes."""
+        entity = TestMediaPlayer("media_player.test", "Test Player")
+        entity._api = mock_api  # noqa: SLF001
+
+        # Entity not found in configured_entities
+        mock_api.configured_entities.get.return_value = None
+
+        update = {
+            media_player.Attributes.STATE: media_player.States.PLAYING,
+            media_player.Attributes.VOLUME: 50,
+        }
+
+        # Should return all attributes when entity not found
+        result = entity.filter_changed_attributes(update)
+        assert result == update

@@ -1842,6 +1842,113 @@ class TestRefreshEntityState:
         # Should update with UNAVAILABLE state
         driver.api.configured_entities.update_attributes.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_with_dataclass_attrs(self):
+        """Test refresh_entity_state when device returns dataclass from get_device_attributes."""
+        from ucapi_framework import MediaPlayerAttributes, Entity as FrameworkEntity
+
+        # Create a device that returns dataclass attrs
+        class DeviceWithDataclassAttrs(DeviceForTests):
+            def get_device_attributes(self, entity_id):
+                return MediaPlayerAttributes(
+                    STATE=media_player.States.PLAYING, VOLUME=75
+                )
+
+        # Create entity that inherits from framework Entity
+        class TestMediaPlayer(media_player.MediaPlayer, FrameworkEntity):
+            pass
+
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        device = DeviceWithDataclassAttrs(config)
+        device._state = "playing"
+        driver._configured_devices["dev1"] = device
+
+        # Create framework entity
+        entity = TestMediaPlayer(
+            "media_player.dev1",
+            "Test",
+            features=[],
+            attributes={media_player.Attributes.STATE: media_player.States.UNKNOWN},
+        )
+        entity._api = driver.api
+        driver.api.configured_entities.get = MagicMock(return_value=entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        # Should have called entity.update() with dataclass
+        driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_with_dict_attrs(self):
+        """Test refresh_entity_state when device returns dict from get_device_attributes."""
+        from ucapi_framework import Entity as FrameworkEntity
+
+        # Create a device that returns dict attrs
+        class DeviceWithDictAttrs(DeviceForTests):
+            def get_device_attributes(self, entity_id):
+                return {
+                    media_player.Attributes.STATE: media_player.States.PLAYING,
+                    media_player.Attributes.VOLUME: 50,
+                }
+
+        # Create entity that inherits from framework Entity
+        class TestMediaPlayer(media_player.MediaPlayer, FrameworkEntity):
+            pass
+
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        device = DeviceWithDictAttrs(config)
+        device._state = "playing"
+        driver._configured_devices["dev1"] = device
+
+        # Create framework entity
+        entity = TestMediaPlayer(
+            "media_player.dev1",
+            "Test",
+            features=[],
+            attributes={media_player.Attributes.STATE: media_player.States.UNKNOWN},
+        )
+        entity._api = driver.api
+        driver.api.configured_entities.get = MagicMock(return_value=entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        # Should have called update_attributes with dict
+        driver.api.configured_entities.update_attributes.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_refresh_entity_state_legacy_dict_fallback(self):
+        """Test refresh_entity_state falls back to API update for non-framework entities with dict."""
+
+        # Create a device that returns dict attrs
+        class DeviceWithDictAttrs(DeviceForTests):
+            def get_device_attributes(self, entity_id):
+                return {
+                    media_player.Attributes.STATE: media_player.States.PLAYING,
+                    media_player.Attributes.VOLUME: 50,
+                }
+
+        driver = self._create_driver()
+        config = DeviceConfigForTests("dev1", "Device 1", "192.168.1.1")
+        device = DeviceWithDictAttrs(config)
+        device._state = "playing"
+        driver._configured_devices["dev1"] = device
+
+        # Create standard ucapi entity (not framework Entity)
+        entity = media_player.MediaPlayer(
+            "media_player.dev1",
+            "Test",
+            features=[],
+            attributes={media_player.Attributes.STATE: media_player.States.UNKNOWN},
+        )
+        driver.api.configured_entities.get = MagicMock(return_value=entity)
+
+        await driver.refresh_entity_state("media_player.dev1")
+
+        # Should have called API update_attributes directly
+        driver.api.configured_entities.update_attributes.assert_called_once()
+
 
 class TestOnSubscribeEntitiesEdgeCases:
     """Tests for on_subscribe_entities edge cases."""
