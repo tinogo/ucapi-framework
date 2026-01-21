@@ -81,6 +81,7 @@ class BaseDeviceInterface(ABC):
         device_config: Any,
         loop: AbstractEventLoop | None = None,
         config_manager: BaseConfigManager | None = None,
+        driver: Any | None = None,
     ):
         """
         Create device interface instance.
@@ -88,17 +89,32 @@ class BaseDeviceInterface(ABC):
         :param device_config: Device configuration
         :param loop: Event loop
         :param config_manager: Optional config manager for persisting configuration updates
+        :param driver: Optional reference to the integration driver. Allows devices to dynamically
+                      register entities at runtime (e.g., when a hub discovers new sub-devices).
         """
         self._loop: AbstractEventLoop = loop or asyncio.get_running_loop()
         self.events = AsyncIOEventEmitter(self._loop)
         self._device_config = device_config
         self._config_manager: BaseConfigManager | None = config_manager
+        self._driver = driver
         self._state: Any = None
 
     @property
     def device_config(self) -> Any:
         """Return the device configuration."""
         return self._device_config
+
+    @property
+    def driver(self) -> Any | None:
+        """
+        Get the integration driver reference.
+
+        Allows devices to interact with the driver, such as dynamically
+        registering entities when new sub-devices are discovered.
+
+        :return: The driver instance or None if not set
+        """
+        return self._driver
 
     def update_config(self, **kwargs) -> bool:
         """
@@ -259,9 +275,10 @@ class StatelessHTTPDevice(BaseDeviceInterface):
         device_config: Any,
         loop: AbstractEventLoop | None = None,
         config_manager: BaseConfigManager | None = None,
+        driver: Any | None = None,
     ):
         """Initialize stateless HTTP device."""
-        super().__init__(device_config, loop, config_manager)
+        super().__init__(device_config, loop, config_manager, driver)
         self._is_connected = False
         self._session_timeout = aiohttp.ClientTimeout(total=10)
 
@@ -341,16 +358,18 @@ class PollingDevice(BaseDeviceInterface):
         loop: AbstractEventLoop | None = None,
         poll_interval: int = 30,
         config_manager: BaseConfigManager | None = None,
+        driver: Any | None = None,
     ):
         """
         Initialize polling device.
 
         :param device_config: Device configuration
         :param loop: Event loop
-        :param poll_interval: Polling interval in seconds
+        :param poll_interval: Polling interval in seconds (default: 30)
         :param config_manager: Optional config manager for persisting configuration updates
+        :param driver: Optional reference to the integration driver
         """
-        super().__init__(device_config, loop, config_manager)
+        super().__init__(device_config, loop, config_manager, driver)
         self._poll_interval = poll_interval
         self._poll_task: asyncio.Task | None = None
         self._stop_polling = asyncio.Event()
@@ -468,6 +487,7 @@ class WebSocketDevice(BaseDeviceInterface):
         ping_interval: int = 30,
         ping_timeout: int = 10,
         config_manager: BaseConfigManager | None = None,
+        driver: Any | None = None,
     ):
         """
         Initialize WebSocket device.
@@ -480,8 +500,9 @@ class WebSocketDevice(BaseDeviceInterface):
         :param ping_interval: Ping/keepalive interval in seconds, 0 to disable (default: 30)
         :param ping_timeout: Ping timeout in seconds (default: 10)
         :param config_manager: Optional config manager for persisting configuration updates
+        :param driver: Optional reference to the integration driver
         """
-        super().__init__(device_config, loop, config_manager)
+        super().__init__(device_config, loop, config_manager, driver)
         self._ws: Any = None
         self._ws_task: asyncio.Task | None = None
         self._ping_task: asyncio.Task | None = None
@@ -1035,6 +1056,7 @@ class ExternalClientDevice(BaseDeviceInterface):
         reconnect_delay: int = 5,
         max_reconnect_attempts: int | None = 3,
         config_manager: BaseConfigManager | None = None,
+        driver: Any | None = None,
     ):
         """
         Initialize external client device.
@@ -1047,8 +1069,9 @@ class ExternalClientDevice(BaseDeviceInterface):
         :param max_reconnect_attempts: Max reconnection attempts before giving up.
             None = disable reconnection, 0 = infinite, positive int = limit
         :param config_manager: Optional config manager
+        :param driver: Optional reference to the integration driver
         """
-        super().__init__(device_config, loop, config_manager)
+        super().__init__(device_config, loop, config_manager, driver)
         self._client: Any = None
         self._enable_watchdog = enable_watchdog
         self._watchdog_task: asyncio.Task | None = None
