@@ -11,6 +11,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import is_dataclass
+from enum import Enum
 from typing import Any, Generic, TypeVar, cast
 
 import ucapi
@@ -49,6 +50,14 @@ _DEVICE_ADDRESS_ATTRIBUTES = (
     "device_address",
     "host",
 )
+
+
+class EntitySource(Enum):
+    """Source for entity filtering operations."""
+
+    ALL = "all"  # Query both available and configured entities
+    AVAILABLE = "available"  # Query only available entities
+    CONFIGURED = "configured"  # Query only configured entities
 
 
 def _get_first_valid_attr(obj: Any, *attrs: str) -> str | None:
@@ -675,6 +684,109 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
         device.events.on(DeviceEvents.ERROR, self.on_device_connection_error)
         device.events.on(DeviceEvents.UPDATE, self.on_device_update)
 
+    def add_entity(self, entity: Entity) -> None:
+        """
+        Add a single entity dynamically at runtime.
+
+        Use this method when devices discover new sub-devices at runtime (e.g., a hub
+        discovering a new light, or checking device capabilities after connection).
+        The entity will be registered as available and can be added by users.
+
+        This allows avoiding connection during initial registry for devices that:
+        - Go into standby quickly (e.g., after 20 seconds)
+        - Require connection to determine capabilities
+        - Dynamically discover sub-devices
+
+        Example usage in a device:
+            async def on_new_light_discovered(self, light_data):
+                new_light = MyLight(self.device_config, self, light_data)
+                if self.driver:
+                    self.driver.add_entity(new_light)
+
+        :param entity: Entity instance to add
+        """
+        # Set API reference for framework entities
+        if isinstance(entity, FrameworkEntity):
+            entity._api = self.api  # type: ignore[misc]
+
+        # Remove if exists (handles re-registration)
+        if self.api.available_entities.contains(entity.id):
+            self.api.available_entities.remove(entity.id)
+
+        # Add to available entities
+        self.api.available_entities.add(entity)
+        _LOG.info("Dynamically added entity: %s", entity.id)
+
+    def filter_entities_by_type(
+        self,
+        entity_type: EntityTypes | str,
+        source: EntitySource | str = EntitySource.ALL,
+    ) -> list[dict[str, Any]]:
+        """
+        Filter entities by entity type.
+
+        Useful for devices to find entities of a specific type (e.g., all sensors,
+        all lights). Can filter from available entities, configured entities, or both.
+
+        Example usage in a device:
+            # Get all sensor entities
+            sensors = self.driver.filter_entities_by_type(EntityTypes.SENSOR)
+
+            # Get only configured light entities using enum
+            lights = self.driver.filter_entities_by_type(
+                "light",
+                source=EntitySource.CONFIGURED
+            )
+
+            # Get available media player entities using string
+            players = self.driver.filter_entities_by_type(
+                EntityTypes.MEDIA_PLAYER,
+                source="available"
+            )
+
+        :param entity_type: Entity type to filter by (EntityTypes enum or string)
+        :param source: Which entity collection to filter (EntitySource enum or string):
+                      EntitySource.ALL or "all" (default) - both available and configured
+                      EntitySource.AVAILABLE or "available" - only available entities
+                      EntitySource.CONFIGURED or "configured" - only configured entities
+        :return: List of entity dictionaries matching the entity_type
+        :raises ValueError: If source is not valid
+        """
+        # Normalize entity_type to string
+        type_str = (
+            entity_type.value if isinstance(entity_type, EntityTypes) else entity_type
+        )
+
+        # Normalize source to string
+        source_str = source.value if isinstance(source, EntitySource) else source
+
+        # Validate source parameter
+        if source_str not in ("all", "available", "configured"):
+            raise ValueError(
+                f"Invalid source '{source_str}'. Must be 'all', 'available', or 'configured', "
+                f"or use EntitySource enum (ALL, AVAILABLE, CONFIGURED)"
+            )
+
+        filtered_entities = []
+
+        # Filter available entities
+        if source_str in ("all", "available"):
+            for entity in self.api.available_entities.get_all():
+                if entity.get("entity_type") == type_str:
+                    filtered_entities.append(entity)
+
+        # Filter configured entities (avoid duplicates if source="all")
+        if source_str in ("all", "configured"):
+            existing_ids = {e["entity_id"] for e in filtered_entities}
+            for entity in self.api.configured_entities.get_all():
+                if (
+                    entity.get("entity_type") == type_str
+                    and entity["entity_id"] not in existing_ids
+                ):
+                    filtered_entities.append(entity)
+
+        return filtered_entities
+
     def register_available_entities(
         self, device_config: ConfigT, device: DeviceT
     ) -> None:
@@ -760,7 +872,10 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
             self.get_device_name(device_config),
         )
         device = self._device_class(
-            device_config, loop=self._loop, config_manager=self._config_manager
+            device_config,
+            loop=self._loop,
+            config_manager=self._config_manager,
+            driver=self,
         )
         self.setup_device_event_handlers(device)
         self._configured_devices[device_id] = device
