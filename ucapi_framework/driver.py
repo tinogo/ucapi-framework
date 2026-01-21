@@ -721,7 +721,7 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
         self,
         entity_type: EntityTypes | str,
         source: EntitySource | str = EntitySource.ALL,
-    ) -> list[dict[str, Any]]:
+    ) -> list[Entity]:
         """
         Filter entities by entity type.
 
@@ -731,6 +731,8 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
         Example usage in a device:
             # Get all sensor entities
             sensors = self.driver.filter_entities_by_type(EntityTypes.SENSOR)
+            for sensor in sensors:
+                print(f"Sensor: {sensor.id}, State: {sensor.attributes.get('state')}")
 
             # Get only configured light entities using enum
             lights = self.driver.filter_entities_by_type(
@@ -749,7 +751,7 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
                       EntitySource.ALL or "all" (default) - both available and configured
                       EntitySource.AVAILABLE or "available" - only available entities
                       EntitySource.CONFIGURED or "configured" - only configured entities
-        :return: List of entity dictionaries matching the entity_type
+        :return: List of Entity objects matching the entity_type
         :raises ValueError: If source is not valid
         """
         # Normalize entity_type to string
@@ -768,22 +770,27 @@ class BaseIntegrationDriver(Generic[DeviceT, ConfigT]):
             )
 
         filtered_entities = []
+        seen_entity_ids = set()
 
         # Filter available entities
         if source_str in ("all", "available"):
-            for entity in self.api.available_entities.get_all():
-                if entity.get("entity_type") == type_str:
-                    filtered_entities.append(entity)
+            for entity_dict in self.api.available_entities.get_all():
+                if entity_dict.get("entity_type") == type_str:
+                    entity_id = entity_dict["entity_id"]
+                    entity = self.api.available_entities.get(entity_id)
+                    if entity:
+                        filtered_entities.append(entity)
+                        seen_entity_ids.add(entity_id)
 
         # Filter configured entities (avoid duplicates if source="all")
         if source_str in ("all", "configured"):
-            existing_ids = {e["entity_id"] for e in filtered_entities}
-            for entity in self.api.configured_entities.get_all():
-                if (
-                    entity.get("entity_type") == type_str
-                    and entity["entity_id"] not in existing_ids
-                ):
-                    filtered_entities.append(entity)
+            for entity_dict in self.api.configured_entities.get_all():
+                if entity_dict.get("entity_type") == type_str:
+                    entity_id = entity_dict["entity_id"]
+                    if entity_id not in seen_entity_ids:
+                        entity = self.api.configured_entities.get(entity_id)
+                        if entity:
+                            filtered_entities.append(entity)
 
         return filtered_entities
 

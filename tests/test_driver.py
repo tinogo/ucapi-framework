@@ -2789,7 +2789,7 @@ class TestFilterEntitiesByType:
 
         # Should get all three players
         assert len(players) == 3
-        entity_ids = [e["entity_id"] for e in players]
+        entity_ids = [e.id for e in players]
         assert "media_player.dev1" in entity_ids
         assert "media_player.dev2" in entity_ids
         assert "media_player.dev3" in entity_ids
@@ -2820,7 +2820,7 @@ class TestFilterEntitiesByType:
 
         # Should only get player1
         assert len(players) == 1
-        assert players[0]["entity_id"] == "media_player.dev1"
+        assert players[0].id == "media_player.dev1"
 
     def test_filter_entities_by_type_configured_only(self, driver):
         """Test filtering only configured entities."""
@@ -2848,7 +2848,7 @@ class TestFilterEntitiesByType:
 
         # Should only get player2
         assert len(players) == 1
-        assert players[0]["entity_id"] == "media_player.dev2"
+        assert players[0].id == "media_player.dev2"
 
     def test_filter_entities_by_type_with_enum(self, driver):
         """Test filtering using EntityTypes enum."""
@@ -2865,7 +2865,7 @@ class TestFilterEntitiesByType:
         players = driver.filter_entities_by_type(EntityTypes.MEDIA_PLAYER)
 
         assert len(players) == 1
-        assert players[0]["entity_id"] == "media_player.dev1"
+        assert players[0].id == "media_player.dev1"
 
     def test_filter_entities_by_type_with_source_enum(self, driver):
         """Test filtering using EntitySource enum for source parameter."""
@@ -2901,10 +2901,10 @@ class TestFilterEntitiesByType:
 
         # Verify filtering works with enum
         assert len(available_only) == 1
-        assert available_only[0]["entity_id"] == "media_player.dev1"
+        assert available_only[0].id == "media_player.dev1"
 
         assert len(configured_only) == 1
-        assert configured_only[0]["entity_id"] == "media_player.dev2"
+        assert configured_only[0].id == "media_player.dev2"
 
         assert len(all_players) == 2
 
@@ -2949,4 +2949,4 @@ class TestFilterEntitiesByType:
 
         # Should only get one instance
         assert len(players) == 1
-        assert players[0]["entity_id"] == "media_player.dev1"
+        assert players[0].id == "media_player.dev1"

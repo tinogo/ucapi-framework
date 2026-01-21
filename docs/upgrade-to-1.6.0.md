@@ -131,7 +131,7 @@ def filter_entities_by_type(
     self,
     entity_type: EntityTypes | str,
     source: EntitySource | str = EntitySource.ALL,
-) -> list[dict[str, Any]]:
+) -> list[Entity]:
     """
     Filter entities by entity type from available and/or configured collections.
     
@@ -143,7 +143,7 @@ def filter_entities_by_type(
             - EntitySource.CONFIGURED or "configured": Only configured entities
     
     Returns:
-        List of entity dictionaries matching the specified type
+        List of Entity objects matching the specified type
     """
 ```
 
@@ -170,6 +170,8 @@ class MyDriver(BaseIntegrationDriver):
     async def custom_logic(self):
         # Get all sensors (both available and configured)
         sensors = self.filter_entities_by_type(EntityTypes.SENSOR)
+        for sensor in sensors:
+            print(f"Sensor: {sensor.id}, State: {sensor.attributes.get('state')}")
         
         # Get only available lights using enum
         lights = self.filter_entities_by_type(
@@ -185,7 +187,7 @@ class MyDriver(BaseIntegrationDriver):
         
         # Process entities
         for sensor in sensors:
-            print(f"Sensor: {sensor['entity_id']}")
+            print(f"Sensor: {sensor.id}, Value: {sensor.attributes.get('value')}")
 ```
 
 #### Using in Devices
@@ -207,7 +209,7 @@ class MyHub(WebSocketDevice):
         
         # Update each light
         for light_entity in lights:
-            await self.update_light_state(light_entity["entity_id"])
+            await self.update_light_state(light_entity.id)
 ```
 
 ## Complete Example: Dynamic Hub Device
@@ -273,13 +275,13 @@ class HubDevice(WebSocketDevice):
         # Filter to just this hub's entities
         hub_lights = [
             light for light in lights
-            if light["entity_id"].startswith(f"light.{self.identifier}.")
+            if light.id.startswith(f"light.{self.identifier}.")
         ]
         
         # Update each light's state
         for light_entity in hub_lights:
             # Update logic here
-            _LOG.debug(f"Updating {light_entity['entity_id']}")
+            _LOG.debug(f"Updating {light_entity.id}")
 
 
 class HubDriver(BaseIntegrationDriver):
