@@ -19,15 +19,14 @@ The framework automatically provides the `api` instance to entities - no manual 
 ### Basic Usage
 
 ```python
-from ucapi import media_player
+from ucapi import MediaPlayer, media_player
 from ucapi_framework.entity import Entity
 
-class MyMediaPlayer(media_player.MediaPlayer, Entity):
+class MyMediaPlayer(MediaPlayer, Entity):
     def __init__(self, device_config, device):
         # Initialize the ucapi entity
         entity_id = self.create_entity_id(device.id, "media_player")
-        media_player.MediaPlayer.__init__(
-            self,
+        super().__init__(
             entity_id,
             device.name,
             features=[media_player.Features.ON_OFF, media_player.Features.VOLUME],
@@ -53,7 +52,7 @@ class MyMediaPlayer(media_player.MediaPlayer, Entity):
 Override `map_entity_states()` to provide entity-specific state mapping:
 
 ```python
-class ZoneMediaPlayer(media_player.MediaPlayer, Entity):
+class ZoneMediaPlayer(MediaPlayer, Entity):
     def __init__(self, device_config, device, zone_id):
         self.zone_id = zone_id
         # ... entity initialization ...
@@ -73,7 +72,7 @@ class ZoneMediaPlayer(media_player.MediaPlayer, Entity):
 The `update_attributes()` method automatically filters out unchanged attributes to reduce API calls:
 
 ```python
-class SmartSensor(sensor.Sensor, Entity):
+class SmartSensor(Sensor, Entity):
     def __init__(self, device_config, device):
         # ... entity initialization ...
     
@@ -100,7 +99,7 @@ Use `update_from_dataclass()` to manage entity state with dataclasses for better
 
 ```python
 from dataclasses import dataclass
-from ucapi import media_player
+from ucapi import media_player, MediaPlayer
 from ucapi_framework import Entity
 
 @dataclass
@@ -109,12 +108,12 @@ class MediaPlayerAttributes:
     VOLUME: int = 0
     MUTED: bool = False
 
-class MyMediaPlayer(media_player.MediaPlayer, Entity):
+class MyMediaPlayer(MediaPlayer, Entity):
     def __init__(self, device_config, device):
         # Initialize ucapi entity
         entity_id = create_entity_id(device.id, "media_player")
-        media_player.MediaPlayer.__init__(
-            self, entity_id, device.name, features, attributes
+        super().__init__(
+            entity_id, device.name, features, attributes
         )
         self._device = device
         
@@ -283,8 +282,7 @@ class MySensor(sensor.Sensor, Entity):
             device_config.id,
             sensor_config["id"]
         )
-        sensor.Sensor.__init__(
-            self,
+        super().__init__(
             entity_id,
             sensor_config["name"],
             features=[],
@@ -367,7 +365,7 @@ class LutronHub(BaseDeviceInterface):
 Entities access the hub data passed from the factory:
 
 ```python
-class LutronLight(light.Light, Entity):
+class LutronLight(Light, Entity):
     def __init__(self, device_config, device, light_info):
         self.light_info = light_info
         self.hub = device
@@ -378,8 +376,7 @@ class LutronLight(light.Light, Entity):
             light_info.id
         )
         
-        light.Light.__init__(
-            self,
+        super().__init__(
             entity_id,
             light_info.name,
             features=[light.Features.ON_OFF, light.Features.DIM],
