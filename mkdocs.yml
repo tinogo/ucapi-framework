@@ -93,6 +93,8 @@ nav:
       - Setup Flow: api/setup.md
       - Configuration: api/config.md
       - Discovery: api/discovery.md
+  - Upgrade Guides:
+      - Upgrading to 1.6.0: upgrade-to-1.6.0.md
   - Migration Guide: migration-guide.md
   - Contributing: contributing.md
 

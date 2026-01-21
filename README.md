@@ -181,6 +181,9 @@ Total: ~295 lines of integration code vs ~885 lines previously. And the new code
 
 If you have an existing integration, see [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for step-by-step instructions with before/after examples.
 
+For upgrading from a previous version of ucapi-framework:
+- **[Upgrading to 1.6.0](https://jackjpowell.github.io/ucapi-framework/upgrade-to-1.6.0/)** - New dynamic entity management features
+
 ## Requirements
 
 - Python 3.11+
