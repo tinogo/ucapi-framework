@@ -18,7 +18,7 @@ See ucapi_framework.discovery module documentation for details.
 :license: Mozilla Public License Version 2.0, see LICENSE for more details.
 """
 
-from .driver import BaseIntegrationDriver, create_entity_id
+from .driver import BaseIntegrationDriver, create_entity_id, EntitySource
 from .setup import BaseSetupFlow, SetupSteps
 from .config import BaseConfigManager, get_config_path
 from .entity import Entity
@@ -87,6 +87,7 @@ __all__ = [
     "verify_migration",
     "find_orphaned_entities",
     "create_entity_id",
+    "EntitySource",
     "EntityAttributes",
     "ButtonAttributes",
     "ClimateAttributes",
@@ -99,4 +100,4 @@ __all__ = [
     "VoiceAssistantAttributes",
 ]
 
-__version__ = "1.5.0b10"
+__version__ = "1.6.0"
